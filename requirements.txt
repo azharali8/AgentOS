@@ -1,0 +1,17 @@
+fastapi>=0.109.2
+uvicorn>=0.27.1
+pydantic>=2.6.1
+pydantic-settings>=2.1.0
+langchain>=0.1.7
+langgraph>=0.0.24
+langchain-core>=0.1.23
+httpx>=0.26.0
+GitPython>=3.1.41
+psutil>=5.9.8
+pyyaml>=6.0.1
+pytest>=8.0.0
+pytest-asyncio>=0.23.5
+python-multipart>=0.0.9
+sqlalchemy>=2.0.25
+alembic>=1.13.1
+langgraph-checkpoint-sqlite

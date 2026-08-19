@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  agentos-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentos-runtime
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=sqlite:////app/data/agentos.db
+      - WORKSPACE_ROOT=/app/workspace
+      - REQUIRE_APPROVAL_FOR_DANGEROUS_ACTIONS=true
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - RATE_LIMIT_REQUESTS=100
+      - RATE_LIMIT_WINDOW=60
+      - ENABLE_METRICS=true
+      - AUTH_ENABLED=true
+    volumes:
+      - agentos-data:/app/data
+      - agentos-workspace:/app/workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  agentos-data:
+  agentos-workspace:
