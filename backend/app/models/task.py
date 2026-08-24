@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Any
 from datetime import datetime
 from enum import Enum
@@ -8,14 +8,25 @@ class TaskStatus(str, Enum):
     PLANNING = "PLANNING"
     WAITING_APPROVAL = "WAITING_APPROVAL"
     EXECUTING = "EXECUTING"
+    PAUSED = "PAUSED"
     REVIEWING = "REVIEWING"
+    CANCELLING = "CANCELLING"
+    CANCELLED = "CANCELLED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
     RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+
+class TaskPriority(str, Enum):
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
 
 class TaskRequest(BaseModel):
     instruction: str
+    priority: TaskPriority = TaskPriority.NORMAL
+    timeout_seconds: Optional[int] = None
+    max_retries: Optional[int] = None
 
 class TaskResult(BaseModel):
     task_id: str
@@ -33,4 +44,3 @@ class TaskResult(BaseModel):
     thread_id: Optional[str] = None
     approval_id: Optional[str] = None
     metadata: Optional[Any] = None
-

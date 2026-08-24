@@ -91,13 +91,11 @@ class ReviewerAgent:
             + f"\n  error: {observation.error}"
         )
 
-        raw = self.llm.generate(prompt)
-
         try:
+            raw = self.llm.generate(prompt)
             return _parse_verdict(raw)
-        except ValueError as exc:
-            logger.warning("Reviewer parse failed, falling back: %s", exc)
-            # Deterministic fallback — never silently succeed a failed step
+        except Exception as exc:
+            logger.warning("Reviewer generation/parse failed, using deterministic fallback: %s", exc)
             if observation.success:
-                return "SUCCESS", "Fallback: observation marked success."
-            return "RETRYABLE", f"Fallback: observation marked failure. Parse error: {exc}"
+                return "SUCCESS", "Step succeeded according to execution evidence."
+            return "RETRYABLE", f"Step failed: {observation.error or exc}"

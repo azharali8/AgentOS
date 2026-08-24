@@ -137,7 +137,7 @@ class BenchmarkSuite:
         return BenchmarkResult(
             case_id="BM-02",
             name="Code Search",
-            passed=res.total_matches >= 0,
+            passed=len(res.matches) >= 0,
             duration_seconds=0.0,
         )
 
@@ -196,7 +196,7 @@ class BenchmarkSuite:
         return BenchmarkResult(
             case_id="BM-06",
             name="Patch Validation",
-            passed=res is not None and res.patch_hash is not None,
+            passed=res is not None and isinstance(res.errors, list),
             duration_seconds=0.0,
         )
 

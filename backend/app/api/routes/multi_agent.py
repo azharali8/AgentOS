@@ -3,7 +3,7 @@ AgentOS Phase 5 — Multi-Agent REST API Endpoints.
 """
 
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 from backend.app.models.multi_agent import AgentDefinition, AgentType
@@ -31,6 +31,15 @@ class ApprovalResolution(BaseModel):
 def list_agents() -> List[AgentDefinition]:
     return AgentRegistry.list_agents()
 
+@agents_router.get("/registry", response_model=List[AgentDefinition])
+def get_registry() -> List[AgentDefinition]:
+    return AgentRegistry.list_agents()
+
+@agents_router.get("/available", response_model=List[AgentDefinition])
+def get_available_agents() -> List[AgentDefinition]:
+    # In a full impl, this might filter disabled agents.
+    return AgentRegistry.list_agents()
+
 
 @agents_router.get("/{name}", response_model=AgentDefinition)
 def get_agent(name: str) -> AgentDefinition:
@@ -40,6 +49,53 @@ def get_agent(name: str) -> AgentDefinition:
     return agent
 
 
+@agents_router.get("/{name}/status")
+def get_agent_status(name: str) -> Dict[str, Any]:
+    agent = AgentRegistry.get(name)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    return {"status": "READY"}
+
+
+@agents_router.get("/{name}/capabilities")
+def get_agent_capabilities(name: str) -> List[str]:
+    agent = AgentRegistry.get(name)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    return [c.value for c in agent.capabilities]
+
+
+from backend.app.evaluation.agent_profiler import AgentProfiler
+
+@agents_router.get("/{name}/metrics")
+def get_agent_metrics(name: str) -> Dict[str, Any]:
+    agent = AgentRegistry.get(name)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    profile = AgentProfiler.get_profile(agent.agent_type)
+    return profile.model_dump()
+
+
+from backend.app.auth.service import UserRole, get_current_user
+
+@agents_router.post("/{name}/invoke")
+def invoke_agent(name: str, payload: Dict[str, Any], user=Depends(get_current_user)) -> Dict[str, Any]:
+    agent = AgentRegistry.get(name)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+        
+    if agent.agent_type == AgentType.CYBERSECURITY:
+        if user.role != UserRole.ADMIN:
+            raise HTTPException(status_code=403, detail="ADMIN role required to invoke CYBERSECURITY agent")
+            
+    # For Phase 8, we just mock the invocation return structure to prove routing integration.
+    # True specialized invocation goes through Supervisor and LangGraph.
+    return {
+        "status": "INVOKED",
+        "agent": agent.name,
+        "task_id": payload.get("task_id", "t-test")
+    }
+
 @agents_router.post("/register", response_model=AgentDefinition)
 def register_agent(agent_def: AgentDefinition) -> AgentDefinition:
     try:
@@ -47,7 +103,6 @@ def register_agent(agent_def: AgentDefinition) -> AgentDefinition:
         return agent_def
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
 
 # ── Multi-Agent Execution Endpoints ───────────────────────────────────
 

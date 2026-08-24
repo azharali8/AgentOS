@@ -1,0 +1,69 @@
+# Docker ignore file for AgentOS
+# Exclude development artifacts, secrets, and test data from build context
+
+# Version control
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv
+venv/
+env/
+.env
+*.env
+.env.*
+!.env.example
+
+# Test artifacts
+tmp/
+.pytest_cache/
+.coverage
+htmlcov/
+*.test.db
+
+# Node modules (frontend)
+frontend/node_modules/
+frontend/.next/cache/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets / credentials — never include in image
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+
+# Logs
+*.log
+logs/
+
+# Database files (should be on persistent volumes, not baked in)
+*.db
+data/
+workspace/
+artifacts/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation
+docs/
+*.md

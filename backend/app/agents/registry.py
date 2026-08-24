@@ -215,6 +215,87 @@ class AgentRegistry:
             max_execution_time=60,
         ))
 
+        # 8. Testing
+        cls.register(AgentDefinition(
+            name="testing",
+            agent_type=AgentType.TESTING,
+            description="Identifies, creates, runs test suites, and analyzes failures/coverage.",
+            capabilities=[
+                AgentCapability.TEST_RUN,
+                AgentCapability.CODE_SEARCH,
+                AgentCapability.CODE_READ,
+            ],
+            allowed_tools=[
+                "test.run",
+                "code.search",
+                "code.read",
+            ],
+            risk_level="MEDIUM",
+            max_concurrency=2,
+            max_execution_time=180,
+        ))
+
+        # 9. Data Engineer
+        cls.register(AgentDefinition(
+            name="data_engineer",
+            agent_type=AgentType.DATA_ENGINEER,
+            description="Profiles, cleans, analyzes datasets (CSV, JSON, Excel, Parquet) and generates EDA reports.",
+            capabilities=[
+                AgentCapability.DATA_CLEANING,
+                AgentCapability.DATA_PROFILING,
+                AgentCapability.DATA_ANALYSIS,
+            ],
+            allowed_tools=[
+                "filesystem.read",
+                "filesystem.list",
+                "filesystem.write",
+            ],
+            risk_level="MEDIUM",
+            max_concurrency=1,
+            max_execution_time=300,
+        ))
+
+        # 10. DevOps / CI-CD
+        cls.register(AgentDefinition(
+            name="devops",
+            agent_type=AgentType.DEVOPS,
+            description="Creates CI/CD pipelines, Docker configurations, and automates builds/deployments.",
+            capabilities=[
+                AgentCapability.CI_CD,
+                AgentCapability.DEPLOYMENT,
+            ],
+            allowed_tools=[
+                "filesystem.read",
+                "filesystem.write",
+                "code.search",
+                "code.read",
+            ],
+            risk_level="MEDIUM",
+            max_concurrency=1,
+            max_execution_time=180,
+        ))
+
+        # 11. Cybersecurity (ADMIN ONLY)
+        cls.register(AgentDefinition(
+            name="cybersecurity",
+            agent_type=AgentType.CYBERSECURITY,
+            description="ADMIN ONLY: Deep security posture analysis, vulnerability scanning, and threat modeling.",
+            capabilities=[
+                AgentCapability.SECURITY_INSPECTION,
+                AgentCapability.POLICY_EVALUATION,
+                AgentCapability.CYBER_AUDIT,
+            ],
+            allowed_tools=[
+                "code.search",
+                "code.read",
+                "filesystem.read",
+                "filesystem.list",
+            ],
+            risk_level="HIGH",
+            max_concurrency=1,
+            max_execution_time=300,
+        ))
+
 
 # Initialize defaults upon module load
 AgentRegistry.reset()

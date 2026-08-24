@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     MAX_REQUEST_BODY_SIZE: int = 2 * 1024 * 1024  # 2 MB
     MAX_JSON_DEPTH: int = 10
 
+    # Phase 10 CORS — allowed origins for the Control Center frontend
+    # Override via CORS_ORIGINS env var (comma-separated) in production
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
     class Config:
         env_file = ".env"
 

@@ -17,10 +17,14 @@ class AgentType(str, Enum):
     SUPERVISOR = "supervisor"
     RESEARCH = "research"
     CODING = "coding"
+    TESTING = "testing"
     DEBUGGER = "debugger"
     REVIEWER = "reviewer"
     DOCUMENTATION = "documentation"
     SECURITY = "security"
+    CYBERSECURITY = "cybersecurity"
+    DATA_ENGINEER = "data_engineer"
+    DEVOPS = "devops"
 
 
 class AgentStatus(str, Enum):
@@ -48,6 +52,12 @@ class AgentCapability(str, Enum):
     DOCUMENTATION = "documentation"
     SECURITY_INSPECTION = "security_inspection"
     POLICY_EVALUATION = "policy_evaluation"
+    DATA_CLEANING = "data_cleaning"
+    DATA_PROFILING = "data_profiling"
+    DATA_ANALYSIS = "data_analysis"
+    CI_CD = "ci_cd"
+    DEPLOYMENT = "deployment"
+    CYBER_AUDIT = "cyber_audit"
 
 
 class AgentBudget(BaseModel):

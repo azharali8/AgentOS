@@ -300,7 +300,10 @@ class ExperienceRetriever:
                 score += min(0.14, overlap / max(1, len(selected_agents)) * 0.14)
                 matched.append("agent_overlap")
 
-        age_seconds = max(0.0, (datetime.now(timezone.utc) - experience.timestamp).total_seconds())
+        exp_ts = experience.timestamp
+        if exp_ts.tzinfo is None:
+            exp_ts = exp_ts.replace(tzinfo=timezone.utc)
+        age_seconds = max(0.0, (datetime.now(timezone.utc) - exp_ts).total_seconds())
         recency = 1.0 / (1.0 + (age_seconds / (7 * 24 * 3600)))
         score += recency * 0.14
         score += max(0.0, min(0.08, experience.evaluation_score * 0.08))

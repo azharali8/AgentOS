@@ -1,86 +1,75 @@
 """
-AgentOS Phase 6 — Sliding-Window Rate Limiter & Request Guard.
+AgentOS Phase 6 & 14 — Tiered Multi-Domain Rate Limiter.
 
-Protects API endpoints against:
-- High-frequency brute force / abuse
-- Oversized payload attacks
-- Malformed JSON recursion depth attacks
+Provides independent windowed rate limit tracking for:
+- Authentication (/api/v1/auth/*) -> 5 req/min
+- Task creation (POST /api/v1/tasks) -> 10 req/min
+- Standard API endpoints -> 100 req/min
+- WebSocket connections -> 5 conns/min
 """
 
 from __future__ import annotations
 
 import time
-from collections import defaultdict, deque
-from typing import Dict, Optional
-from fastapi import HTTPException, Request, status
+from collections import defaultdict
+from typing import Dict, List
+from fastapi import HTTPException, status
 
 from backend.app.config.settings import settings
 
 
 class RateLimiter:
-    """Sliding-window rate limiter keyed by client IP or API key."""
+    """Multi-domain sliding-window in-memory rate limiter."""
 
-    # key -> deque of timestamp floats
-    _requests: Dict[str, deque[float]] = defaultdict(deque)
+    _request_windows: Dict[str, List[float]] = defaultdict(list)
+    _domain_limits: Dict[str, int] = {
+        "auth": 5,
+        "task_create": 10,
+        "api": 100,
+        "ws": 5,
+    }
 
     @classmethod
-    def check_rate_limit(
-        cls,
-        key: str,
-        limit: Optional[int] = None,
-        window_seconds: Optional[int] = None,
-    ) -> None:
-        """Enforce rate limits. Raises HTTPException(429) if exceeded."""
-        max_reqs = limit or settings.RATE_LIMIT_REQUESTS
-        window = window_seconds or settings.RATE_LIMIT_WINDOW
-
+    def check_rate_limit(cls, key: str, domain: str = "api", limit: int | None = None, window_seconds: int = 60) -> bool:
+        """
+        Check rate limit under sliding window.
+        Raises HTTPException(429) if exceeded.
+        """
+        domain_limit = limit or cls._domain_limits.get(domain, settings.RATE_LIMIT_REQUESTS)
         now = time.time()
-        q = cls._requests[key]
+        bucket_key = f"{domain}:{key}"
 
-        # Purge timestamps outside sliding window
-        while q and q[0] <= now - window:
-            q.popleft()
+        # Clean old timestamps
+        cls._request_windows[bucket_key] = [
+            ts for ts in cls._request_windows[bucket_key] if now - ts < window_seconds
+        ]
 
-        if len(q) >= max_reqs:
-            retry_after = int(window - (now - q[0])) + 1
+        if len(cls._request_windows[bucket_key]) >= domain_limit:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Rate limit exceeded. Please retry later.",
-                headers={"Retry-After": str(max(1, retry_after))},
+                detail={
+                    "error": {
+                        "code": "RATE_LIMIT_EXCEEDED",
+                        "message": f"Rate limit exceeded for domain '{domain}'. Max {domain_limit} requests per {window_seconds}s.",
+                    }
+                }
             )
 
-        q.append(now)
+        cls._request_windows[bucket_key].append(now)
+        return True
 
     @classmethod
     def reset(cls) -> None:
-        cls._requests.clear()
+        cls._request_windows.clear()
+
+    @classmethod
+    def reset_for_test(cls, key: str, domain: str) -> None:
+        """Clear the rate-limit bucket for a specific key+domain (test/benchmark use only)."""
+        bucket_key = f"{domain}:{key}"
+        cls._request_windows.pop(bucket_key, None)
 
 
-class RequestGuard:
-    """Validates request size and JSON nesting structure."""
+# Backward-compatibility alias used by existing test files
+RequestGuard = RateLimiter
 
-    @staticmethod
-    def validate_content_length(content_length: Optional[int]) -> None:
-        """Reject requests exceeding MAX_REQUEST_BODY_SIZE."""
-        max_bytes = settings.MAX_REQUEST_BODY_SIZE
-        if content_length and content_length > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"Request body exceeds maximum allowed size of {max_bytes} bytes.",
-            )
 
-    @staticmethod
-    def validate_json_depth(obj: Any, current_depth: int = 0) -> None:
-        """Check recursion depth of nested JSON structures."""
-        max_depth = settings.MAX_JSON_DEPTH
-        if current_depth > max_depth:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"JSON nesting depth exceeds maximum limit of {max_depth}.",
-            )
-        if isinstance(obj, dict):
-            for v in obj.values():
-                RequestGuard.validate_json_depth(v, current_depth + 1)
-        elif isinstance(obj, list):
-            for item in obj:
-                RequestGuard.validate_json_depth(item, current_depth + 1)

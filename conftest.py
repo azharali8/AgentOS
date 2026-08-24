@@ -9,12 +9,14 @@ full suite.
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 
 
 def pytest_configure() -> None:
-    temp_root = Path(__file__).resolve().parent / "tmp"
+    repo_root = Path(__file__).resolve().parent
+    temp_root = repo_root / "tmp"
     temp_root.mkdir(parents=True, exist_ok=True)
     temp_path = str(temp_root)
 
@@ -22,3 +24,8 @@ def pytest_configure() -> None:
     os.environ["TEMP"] = temp_path
     os.environ["TMPDIR"] = temp_path
     tempfile.tempdir = temp_path
+
+    # Ensure sdk package is resolvable
+    sdk_path = str(repo_root / "sdk")
+    if sdk_path not in sys.path:
+        sys.path.insert(0, sdk_path)

@@ -1,1 +1,0 @@
-print("Setup script stub")

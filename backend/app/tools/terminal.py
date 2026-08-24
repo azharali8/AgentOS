@@ -118,5 +118,34 @@ class TerminalTool(BaseTool):
         except Exception as e:
             return ToolResult(tool_name=self.metadata.name, success=False, error=str(e))
 
+    def validate_command(self, command: str) -> dict:
+        """
+        Dry-run security check for a command string.
+        Returns {"allowed": True} if command passes all gates,
+        or {"allowed": False, "reason": "<why>"} if rejected.
+        Does NOT execute the command.
+        """
+        forbidden_constructs = ["|", "||", "&", "&&", ";", ">", ">>", "<", "<<", "`", "$(", "${", "2>", "2>>", "2>&1"]
+        for construct in forbidden_constructs:
+            if construct in command:
+                return {"allowed": False, "reason": f"Shell construct '{construct}' not allowed"}
+
+        try:
+            parsed = shlex.split(command, posix=(platform.system() != "Windows"))
+        except ValueError as exc:
+            return {"allowed": False, "reason": f"Invalid command syntax: {exc}"}
+
+        if not parsed:
+            return {"allowed": False, "reason": "Empty command"}
+
+        cmd_base = parsed[0]
+        args = parsed[1:]
+
+        if self._is_shell_wrapper(cmd_base, args):
+            return {"allowed": False, "reason": "Shell wrappers are not allowed"}
+
+        return {"allowed": True}
+
+
 from backend.app.tools.registry import ToolRegistry
 ToolRegistry.register(TerminalTool())

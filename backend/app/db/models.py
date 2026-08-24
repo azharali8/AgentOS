@@ -24,6 +24,7 @@ class TaskModel(Base):
     approvals = relationship("ApprovalModel", back_populates="task", cascade="all, delete-orphan")
     executions = relationship("ExecutionModel", back_populates="task", cascade="all, delete-orphan")
     events = relationship("EventModel", back_populates="task", cascade="all, delete-orphan")
+    artifacts = relationship("ArtifactModel", back_populates="task", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_tasks_status", "status"),
@@ -97,6 +98,46 @@ class EventModel(Base):
         Index("ix_events_event_type", "event_type"),
     )
 
+class ArtifactModel(Base):
+    __tablename__ = "artifacts"
+
+    artifact_id = Column(String(36), primary_key=True)
+    task_id = Column(String(36), ForeignKey("tasks.task_id", ondelete="CASCADE"), nullable=False)
+    agent_id = Column(String(50), nullable=False)
+    artifact_type = Column(String(50), nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    content_json = Column(JSON, nullable=False)
+    provenance = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+
+    task = relationship("TaskModel", back_populates="artifacts")
+
+    __table_args__ = (
+        Index("ix_artifacts_task_id", "task_id"),
+        Index("ix_artifacts_artifact_type", "artifact_type"),
+        Index("ix_artifacts_content_hash", "content_hash"),
+        Index("ix_artifacts_created_at", "created_at"),
+    )
+
+class AuditLogModel(Base):
+    __tablename__ = "audit_logs"
+
+    log_id = Column(String(36), primary_key=True)
+    user_id = Column(String(100), nullable=True)
+    user_role = Column(String(50), nullable=True)
+    action = Column(String(100), nullable=False)
+    target_entity = Column(String(100), nullable=True)
+    target_id = Column(String(100), nullable=True)
+    client_ip = Column(String(50), nullable=True)
+    status = Column(String(50), nullable=False)  # SUCCESS, DENIED, FAILED
+    details = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+
+    __table_args__ = (
+        Index("ix_audit_logs_action", "action"),
+        Index("ix_audit_logs_user_id", "user_id"),
+        Index("ix_audit_logs_created_at", "created_at"),
+    )
 
 class AgentPerformanceModel(Base):
     __tablename__ = "agent_performance"
@@ -110,7 +151,6 @@ class AgentPerformanceModel(Base):
         Index("ix_agent_performance_agent_type", "agent_type"),
         Index("ix_agent_performance_updated_at", "updated_at"),
     )
-
 
 class TaskHistoryModel(Base):
     __tablename__ = "task_history"
@@ -130,7 +170,6 @@ class TaskHistoryModel(Base):
         Index("ix_task_history_category", "task_category"),
     )
 
-
 class TaskStrategyModel(Base):
     __tablename__ = "task_strategies"
 
@@ -143,7 +182,6 @@ class TaskStrategyModel(Base):
     __table_args__ = (
         Index("ix_task_strategies_task_id", "task_id"),
     )
-
 
 class FailurePatternModel(Base):
     __tablename__ = "failure_patterns"
@@ -159,7 +197,6 @@ class FailurePatternModel(Base):
         Index("ix_failure_patterns_category", "category"),
     )
 
-
 class StrategyEvaluationModel(Base):
     __tablename__ = "strategy_evaluations"
 
@@ -174,7 +211,6 @@ class StrategyEvaluationModel(Base):
         Index("ix_strategy_evaluations_task_id", "task_id"),
     )
 
-
 class PlanEvaluationModel(Base):
     __tablename__ = "plan_evaluations"
 
@@ -187,7 +223,6 @@ class PlanEvaluationModel(Base):
     __table_args__ = (
         Index("ix_plan_evaluations_task_id", "task_id"),
     )
-
 
 class RoutingDecisionModel(Base):
     __tablename__ = "routing_decisions"
@@ -209,7 +244,6 @@ class RoutingDecisionModel(Base):
         Index("ix_routing_decisions_created_at", "created_at"),
     )
 
-
 class ExecutionEvaluationModel(Base):
     __tablename__ = "execution_evaluations"
 
@@ -228,7 +262,6 @@ class ExecutionEvaluationModel(Base):
         Index("ix_execution_evaluations_task_id", "task_id"),
         Index("ix_execution_evaluations_created_at", "created_at"),
     )
-
 
 class LearningExperienceModel(Base):
     __tablename__ = "learning_experiences"
@@ -276,7 +309,5 @@ class LearningExperienceModel(Base):
         Index("ix_learning_experiences_task_description_hash", "task_description_hash"),
     )
 
-
 from backend.app.db.database import engine  # noqa: E402
-
 Base.metadata.create_all(bind=engine)

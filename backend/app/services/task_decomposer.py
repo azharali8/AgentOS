@@ -31,10 +31,14 @@ Decompose the following user request into a minimal, focused Directed Acyclic Gr
 Available Agent Types:
 - "research": Code search, AST symbol extraction, file reading, repository scanning, Git inspection.
 - "coding": Code modification, patch formulation, validation, and approved patch application.
-- "debugger": Test execution, failure analysis, root-cause diagnosis, and regression verification.
+- "testing": Identifies, creates, runs test suites, and analyzes failures/coverage.
+- "debugger": Diagnoses test failures, identifies root causes, and validates bug fixes.
 - "reviewer": Result verification, consistency checks, code review, safety assessment.
 - "documentation": Markdown report writing, documentation summary, guide generation.
 - "security": Risk analysis, sensitive file policy verification, dependency checks.
+- "cybersecurity": Deep security posture analysis, vulnerability scanning, and threat modeling (ADMIN ONLY).
+- "data_engineer": Profiles, cleans, analyzes datasets (CSV, JSON, Excel, Parquet) and generates EDA reports.
+- "devops": Creates CI/CD pipelines, Docker configurations, and automates builds/deployments.
 
 Rules:
 1. Return valid JSON only with the schema below.

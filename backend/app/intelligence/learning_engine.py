@@ -108,11 +108,11 @@ class LearningEngine:
             },
         )
         rejected_count = max(0, len(recommendations) - len(safe_recommendations))
+        average_confidence = mean([rec.confidence for rec in safe_recommendations]) if safe_recommendations else 0.0
         if recommendations:
             AdaptiveMetricsCollector.record_learning_recommendation(len(recommendations), average_confidence)
         for _ in range(rejected_count):
             AdaptiveMetricsCollector.record_learning_recommendation_rejected()
-        average_confidence = mean([rec.confidence for rec in safe_recommendations]) if safe_recommendations else 0.0
 
         AdaptiveMetricsCollector.record_learning_latency(time.perf_counter() - start)
         EventService.record_event(

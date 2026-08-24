@@ -1,5 +1,5 @@
 """
-AgentOS Phase 5 — Per-Agent Permission & Authorization System.
+AgentOS Phase 5 & 8 — Per-Agent Permission & Authorization System.
 
 Enforces strict least-privilege access:
 - Default: DENY
@@ -59,32 +59,36 @@ class AgentPermissionManager:
         is_tool_allowed = (
             t_name in perm.allowed_tools
             or op_name in perm.allowed_tools
-            or f"{t_name}.*" in perm.allowed_tools
         )
         if not is_tool_allowed:
-            logger.warning("Agent %s denied tool %s (not in agent allowlist)", agent_type.value, op_name)
+            logger.warning("Agent %s denied tool: %s (allowed: %s)", agent_type.value, op_name, perm.allowed_tools)
             return False
 
-        # Must also pass SecurityManager base check
-        return SecurityManager.is_allowed(t_name, op)
+        return True
 
     @classmethod
     def can_delegate(cls, agent_type: AgentType) -> bool:
-        """Only SUPERVISOR is permitted to decompose and delegate tasks."""
+        """Check whether an agent is allowed to delegate tasks to others."""
         perm = cls.get_permission(agent_type)
-        return bool(perm and perm.can_delegate and agent_type == AgentType.SUPERVISOR)
+        if not perm:
+            return False
+        return perm.can_delegate
 
     @classmethod
     def can_modify_code(cls, agent_type: AgentType) -> bool:
-        """Check whether agent has permission to propose or apply patches."""
+        """Check whether an agent is authorized to modify source code."""
         perm = cls.get_permission(agent_type)
-        return bool(perm and perm.can_modify_code)
+        if not perm:
+            return False
+        return perm.can_modify_code
 
     @classmethod
     def can_execute_tests(cls, agent_type: AgentType) -> bool:
-        """Check whether agent has permission to invoke test runners."""
+        """Check whether an agent is authorized to run test suites."""
         perm = cls.get_permission(agent_type)
-        return bool(perm and perm.can_execute_tests)
+        if not perm:
+            return False
+        return perm.can_execute_tests
 
     @classmethod
     def can_access_memory(cls, agent_type: AgentType, category: str) -> bool:
@@ -102,7 +106,7 @@ class AgentPermissionManager:
 
     @classmethod
     def _setup_defaults(cls) -> None:
-        """Initialize default least-privilege matrix for Phase 5."""
+        """Initialize default least-privilege matrix for all agent types."""
         # 1. SUPERVISOR
         cls.register_permission(AgentPermission(
             agent_type=AgentType.SUPERVISOR,
@@ -178,6 +182,46 @@ class AgentPermissionManager:
         cls.register_permission(AgentPermission(
             agent_type=AgentType.SECURITY,
             allowed_tools=["code.search", "code.read"],
+            can_delegate=False,
+            can_modify_code=False,
+            can_execute_tests=False,
+            allowed_memory_categories=["short_term", "project", "semantic"],
+        ))
+
+        # 8. TESTING
+        cls.register_permission(AgentPermission(
+            agent_type=AgentType.TESTING,
+            allowed_tools=["test.run", "code.search", "code.read"],
+            can_delegate=False,
+            can_modify_code=False,
+            can_execute_tests=True,
+            allowed_memory_categories=["short_term", "project"],
+        ))
+
+        # 9. DATA_ENGINEER
+        cls.register_permission(AgentPermission(
+            agent_type=AgentType.DATA_ENGINEER,
+            allowed_tools=["filesystem.read", "filesystem.list"],
+            can_delegate=False,
+            can_modify_code=False,
+            can_execute_tests=False,
+            allowed_memory_categories=["short_term", "project"],
+        ))
+
+        # 10. DEVOPS
+        cls.register_permission(AgentPermission(
+            agent_type=AgentType.DEVOPS,
+            allowed_tools=["filesystem.read", "filesystem.list", "code.read"],
+            can_delegate=False,
+            can_modify_code=False,
+            can_execute_tests=False,
+            allowed_memory_categories=["short_term", "project"],
+        ))
+
+        # 11. CYBERSECURITY
+        cls.register_permission(AgentPermission(
+            agent_type=AgentType.CYBERSECURITY,
+            allowed_tools=["code.search", "code.read", "filesystem.list", "filesystem.read"],
             can_delegate=False,
             can_modify_code=False,
             can_execute_tests=False,

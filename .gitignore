@@ -1,47 +1,83 @@
-# Python-generated files
+# Environment and Secrets (Never commit credentials)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+
+# Python compiled files & runtime cache
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 build/
 dist/
 wheels/
 *.egg-info/
+.eggs/
 
-# Testing & coverage
-.pytest_cache/
-.coverage
-htmlcov/
-.mypy_cache/
-.ruff_cache/
-
-# Virtual environments
+# Virtual Environments
 .venv/
 venv/
 env/
+ENV/
+.Python
 
-# Environment & secrets (never commit credentials)
-.env
-.env.*
-!.env.example
+# Testing, coverage, and linters
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+pytest_tmp/
+%TEMP%pytest-temp/
 
-# Local databases & runtime data
+# SQLite, Local Databases, and Backups
 *.db
 *.sqlite
 *.sqlite3
+*.test.db
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/backups/
+data/artifacts/
+pre_restore_emergency_*.db
+agentos_backup_*.db
+agentos_backup_*.sha256
+
+# AgentOS Workspace & Runtime Artifacts
+workspace/
+artifacts/
+tmp/
+.cache/
+*.tmp
 
 # Logs
 logs/
 *.log
 
-# IDE & editor
+# Node & Next.js (Frontend)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/*.tsbuildinfo
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# IDE, Editor, and Tooling
 .vscode/
 .idea/
-
-# OS files
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
-
-# Temporary & cache
-tmp/
-.cache/
-*.tmp

@@ -40,3 +40,8 @@ class EventService:
                     "payload": redact_secrets(m.payload)
                 })
             return res
+
+    @classmethod
+    def get_task_events(cls, task_id: str) -> List[Dict[str, Any]]:
+        """Alias for list_events returning all events for a given task."""
+        return cls.list_events(task_id, limit=500, offset=0)

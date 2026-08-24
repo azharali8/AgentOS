@@ -1,35 +1,80 @@
-version: '3.8'
+version: "3.9"
 
 services:
-  agentos-backend:
+  backend:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: agentos-runtime
+      target: runtime
+    container_name: agentos-backend
     restart: unless-stopped
+    environment:
+      - AGENTOS_ENV=production
+      - DATABASE_URL=sqlite:////app/data/agentos.db
+      - WORKSPACE_BASE_DIR=/app/workspace
+      - ARTIFACTS_DIR=/app/artifacts
+      - LOG_LEVEL=INFO
+      # Secrets should be injected via Docker secrets or .env.production (not committed)
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     ports:
       - "8000:8000"
-    environment:
-      - APP_ENV=production
-      - LOG_LEVEL=INFO
-      - DATABASE_URL=sqlite:////app/data/agentos.db
-      - WORKSPACE_ROOT=/app/workspace
-      - REQUIRE_APPROVAL_FOR_DANGEROUS_ACTIONS=true
-      - LLM_PROVIDER=ollama
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - RATE_LIMIT_REQUESTS=100
-      - RATE_LIMIT_WINDOW=60
-      - ENABLE_METRICS=true
-      - AUTH_ENABLED=true
     volumes:
+      # Named persistent volumes — survive container restarts and rebuilds
       - agentos-data:/app/data
       - agentos-workspace:/app/workspace
+      - agentos-artifacts:/app/artifacts
+      - agentos-logs:/app/logs
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 20s
+    networks:
+      - agentos-net
+
+  frontend:
+    image: node:20-slim
+    container_name: agentos-frontend
+    working_dir: /app
+    command: sh -c "npm ci --legacy-peer-deps && npm run start -- -p 3000"
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+      - NODE_ENV=production
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - agentos-net
 
 volumes:
   agentos-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_HOST_PATH:-./data}
   agentos-workspace:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${WORKSPACE_HOST_PATH:-./workspace}
+  agentos-artifacts:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${ARTIFACTS_HOST_PATH:-./artifacts}
+  agentos-logs:
+    driver: local
+
+networks:
+  agentos-net:
+    driver: bridge

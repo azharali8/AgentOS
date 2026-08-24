@@ -58,5 +58,5 @@ class ReflectionEngine:
             avoidable_steps=avoidable_steps,
         )
 
-        EventService.record_event(task_id, "REFLECTION_COMPLETED", payload=result.model_dump(mode="json"))
+        EventService.record_event(task_id, "REFLECTION_COMPLETED", payload=result.model_dump(mode='json'))
         return result
