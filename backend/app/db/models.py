@@ -309,5 +309,81 @@ class LearningExperienceModel(Base):
         Index("ix_learning_experiences_task_description_hash", "task_description_hash"),
     )
 
+
+class WorkerModel(Base):
+    __tablename__ = "workers"
+
+    worker_id = Column(String(64), primary_key=True)
+    hostname = Column(String(255), nullable=False)
+    process_id = Column(Integer, nullable=False)
+    capabilities = Column(JSON, default=list, nullable=False)
+    active_tasks = Column(Integer, default=0, nullable=False)
+    max_tasks = Column(Integer, default=2, nullable=False)
+    status = Column(String(50), default="STARTING", nullable=False)  # STARTING, READY, BUSY, DRAINING, UNHEALTHY, OFFLINE
+    last_heartbeat = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+    started_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+    worker_metadata = Column(JSON, default=dict, nullable=False)
+
+    leases = relationship("TaskLeaseModel", back_populates="worker", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_workers_status", "status"),
+        Index("ix_workers_last_heartbeat", "last_heartbeat"),
+    )
+
+
+class TaskLeaseModel(Base):
+    __tablename__ = "task_leases"
+
+    lease_id = Column(String(64), primary_key=True)
+    task_id = Column(String(36), ForeignKey("tasks.task_id", ondelete="CASCADE"), nullable=False)
+    worker_id = Column(String(64), ForeignKey("workers.worker_id", ondelete="CASCADE"), nullable=False)
+    fencing_token = Column(Integer, default=1, nullable=False)
+    lease_started_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+    lease_expires_at = Column(DateTime, nullable=False)
+    last_renewed_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+    status = Column(String(50), default="ACTIVE", nullable=False)  # ACTIVE, EXPIRED, RELEASED, REVOKED
+    renew_count = Column(Integer, default=0, nullable=False)
+
+    worker = relationship("WorkerModel", back_populates="leases")
+    task = relationship("TaskModel")
+
+    __table_args__ = (
+        Index("ix_task_leases_task_id", "task_id"),
+        Index("ix_task_leases_worker_id", "worker_id"),
+        Index("ix_task_leases_status", "status"),
+        Index("ix_task_leases_expires", "lease_expires_at"),
+    )
+
+
+class QueueEntryModel(Base):
+    __tablename__ = "task_queue"
+
+    queue_id = Column(String(64), primary_key=True)
+    task_id = Column(String(36), ForeignKey("tasks.task_id", ondelete="CASCADE"), unique=True, nullable=False)
+    priority = Column(Integer, default=2, nullable=False)  # 0=CRITICAL, 1=HIGH, 2=NORMAL, 3=LOW
+    status = Column(String(50), default="QUEUED", nullable=False)  # QUEUED, DISPATCHED, RUNNING, PAUSED, CANCELLING, CANCELLED, RECOVERY_REQUIRED, FAILED, COMPLETED
+    required_capabilities = Column(JSON, default=list, nullable=False)
+    assigned_worker_id = Column(String(64), ForeignKey("workers.worker_id", ondelete="SET NULL"), nullable=True)
+    current_fencing_token = Column(Integer, default=0, nullable=False)
+    enqueued_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+    dispatched_at = Column(DateTime, nullable=True)
+    retry_count = Column(Integer, default=0, nullable=False)
+    retry_limit = Column(Integer, default=3, nullable=False)
+    idempotency_key = Column(String(64), nullable=True)
+    queue_metadata = Column(JSON, default=dict, nullable=False)
+
+    task = relationship("TaskModel")
+    assigned_worker = relationship("WorkerModel")
+
+    __table_args__ = (
+        Index("ix_task_queue_status", "status"),
+        Index("ix_task_queue_priority", "priority"),
+        Index("ix_task_queue_enqueued_at", "enqueued_at"),
+        Index("ix_task_queue_idempotency", "idempotency_key"),
+    )
+
+
 from backend.app.db.database import engine  # noqa: E402
 Base.metadata.create_all(bind=engine)
+

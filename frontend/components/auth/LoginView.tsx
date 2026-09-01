@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Lock, Mail, Shield, ArrowRight, AlertCircle, Terminal, Cpu } from 'lucide-react';
+import { Lock, Mail, Shield, ArrowRight, AlertCircle, Sparkles } from 'lucide-react';
 import { AgentOSClient } from '../../lib/api';
 import { UserProfile } from '../../types';
 
@@ -48,65 +48,61 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center px-4 py-12 select-none text-slate-100 font-sans">
-      {/* Background Ambience */}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(30,58,138,0.15),transparent_70%)] pointer-events-none" />
-
-      {/* Main Console Box */}
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl relative z-10 space-y-6">
+    <div className="min-h-screen bg-[#f8fafc] bg-grid-pattern flex flex-col justify-center items-center px-4 py-12 select-none text-slate-900 font-sans relative">
+      {/* Main Login Card */}
+      <div className="w-full max-w-md bg-white border border-slate-200/90 rounded-3xl p-8 shadow-[0_10px_40px_rgba(0,0,0,0.06)] relative z-10 space-y-6">
         {/* Brand Header */}
         <div className="text-center space-y-2">
-          <div className="inline-flex items-center space-x-2 px-3 py-1 bg-slate-800/80 border border-slate-700/60 rounded-full text-slate-300 font-mono text-[11px]">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>CONTROL PLANE v0.3.0</span>
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 mx-auto flex items-center justify-center text-white shadow-sm shadow-indigo-500/30">
+            <Sparkles className="w-5 h-5" />
           </div>
-          <h1 className="text-2xl font-bold tracking-widest text-slate-100 font-mono uppercase mt-2">
-            AGENTOS
+          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+            AgentOS
           </h1>
-          <p className="text-xs text-slate-400 font-mono">
-            AI Engineering Operating System · Secure Workspace
+          <p className="text-xs text-slate-500">
+            AI Software Engineering Operating System
           </p>
         </div>
 
         {error && (
-          <div className="p-3 bg-rose-950/50 border border-rose-800/50 rounded-lg flex items-center space-x-2.5 text-rose-300 text-xs font-mono">
-            <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center space-x-2.5 text-rose-700 text-xs">
+            <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />
             <span>{error}</span>
           </div>
         )}
 
         {/* Login Form */}
-        <form onSubmit={handleSubmit} className="space-y-4 font-mono text-xs">
+        <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           <div>
-            <label className="block text-[11px] uppercase font-bold text-slate-400 mb-1.5">
-              Engineering Identity (Email)
+            <label className="block text-[11px] font-semibold text-slate-700 mb-1.5">
+              Email Address
             </label>
             <div className="relative">
-              <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+              <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="developer@agentos.local"
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-[11px] uppercase font-bold text-slate-400 mb-1.5">
+            <label className="block text-[11px] font-semibold text-slate-700 mb-1.5">
               Password
             </label>
             <div className="relative">
-              <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+              <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
               <input
                 type="password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all"
               />
             </div>
           </div>
@@ -114,49 +110,49 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full mt-2 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg font-bold font-mono text-xs flex items-center justify-center space-x-2 transition-colors shadow-sm"
+            className="w-full mt-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-semibold text-xs flex items-center justify-center space-x-2 transition-all shadow-sm shadow-indigo-600/20"
           >
             <span>{loading ? 'Authenticating...' : 'Sign In to Workspace'}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </form>
 
-        {/* Workspace Quick-Access Profiles for Testing */}
-        <div className="pt-4 border-t border-slate-800/80 space-y-2 font-mono text-[11px]">
-          <span className="text-[10px] text-slate-500 uppercase font-bold block text-center">
-            Standard Workstation Credentials
+        {/* Quick Profiles */}
+        <div className="pt-4 border-t border-slate-100 space-y-2 text-xs">
+          <span className="text-[11px] text-slate-400 font-medium block text-center">
+            Quick-access Workstation Profiles
           </span>
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={() => setPresetUser('user')}
-              className={`p-2 rounded border text-left transition-colors ${
+              className={`p-2.5 rounded-xl border text-left transition-all ${
                 email === 'azhar@agentos.local'
-                  ? 'bg-blue-950/40 border-blue-500/60 text-blue-300'
-                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800/50'
+                  ? 'bg-indigo-50/70 border-indigo-300 text-indigo-900'
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
             >
-              <span className="block font-bold text-[10px]">Azhar Ali (USER)</span>
-              <span className="text-[9px] text-slate-500 block truncate">Standard Engineer</span>
+              <span className="block font-bold text-[11px]">Azhar Ali</span>
+              <span className="text-[10px] text-slate-400 block truncate">Developer</span>
             </button>
 
             <button
               type="button"
               onClick={() => setPresetUser('admin')}
-              className={`p-2 rounded border text-left transition-colors ${
+              className={`p-2.5 rounded-xl border text-left transition-all ${
                 email === 'admin@agentos.local'
-                  ? 'bg-rose-950/40 border-rose-500/60 text-rose-300'
-                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800/50'
+                  ? 'bg-indigo-50/70 border-indigo-300 text-indigo-900'
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
             >
-              <span className="block font-bold text-[10px]">Admin (ADMIN)</span>
-              <span className="text-[9px] text-slate-500 block truncate">Root & Security Ops</span>
+              <span className="block font-bold text-[11px]">Admin</span>
+              <span className="text-[10px] text-slate-400 block truncate">Security Root</span>
             </button>
           </div>
         </div>
       </div>
 
-      <footer className="mt-8 text-center text-slate-600 font-mono text-[11px] space-y-1">
+      <footer className="mt-8 text-center text-slate-400 text-xs space-y-1">
         <p>Security Boundaries: Workspace Sandbox · SHA-256 Checksums · Rate Limiting</p>
       </footer>
     </div>

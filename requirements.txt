@@ -15,3 +15,6 @@ python-multipart>=0.0.9
 sqlalchemy>=2.0.25
 alembic>=1.13.1
 langgraph-checkpoint-sqlite
+psycopg2-binary>=2.9.9
+redis>=5.0.1
+

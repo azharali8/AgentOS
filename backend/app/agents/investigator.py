@@ -105,7 +105,7 @@ class CodeInvestigatorAgent:
         except Exception as exc:
             logger.warning("Investigation LLM synthesis error: %s", exc)
             return InvestigationResult(
-                affected_files=affected_files or ["calculator.py"],
+                affected_files=affected_files or [],
                 relevant_symbols=symbols,
                 evidence=f"Retrieved {len(gathered_evidence)} code sections.",
                 suspected_root_cause=failures[0].message if failures else "Unknown issue",

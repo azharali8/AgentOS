@@ -80,6 +80,24 @@ class Settings(BaseSettings):
     # Override via CORS_ORIGINS env var (comma-separated) in production
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
+    # Phase 16 PostgreSQL + Redis Distributed Coordination Settings
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_MAX_CONNECTIONS: int = 20
+    REDIS_SOCKET_TIMEOUT: float = 0.5
+    REDIS_RETRY_LIMIT: int = 3
+    QUEUE_BACKEND: str = "sqlite"          # "sqlite" | "redis"
+    RATE_LIMIT_BACKEND: str = "memory"     # "memory" | "redis"
+    EVENT_BACKEND: str = "db"              # "db" | "redis" | "both"
+    LEASE_TTL: int = 30
+    HEARTBEAT_INTERVAL: int = 10
+    WORKER_STALE_TIMEOUT: int = 60
+    SCHEDULER_LOCK_TTL: int = 15
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_RECYCLE_SECONDS: int = 300
+    DB_POOL_TIMEOUT_SECONDS: int = 30
+
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

@@ -66,7 +66,10 @@ class ContextEngine:
         if not candidate_files:
             candidate_files = self.intelligence.find_relevant_files(instruction, max_files=4)
         if not candidate_files:
-            candidate_files = ["calculator.py"]
+            # Dynamically discover the first available file in the workspace
+            # instead of assuming a hardcoded filename like calculator.py
+            candidate_files = self.intelligence.get_first_workspace_files(max_files=2)
+
 
         # 2. Agent-specific prioritization filter
         for rel_path in candidate_files:

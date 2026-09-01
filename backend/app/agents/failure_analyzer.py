@@ -73,7 +73,7 @@ class FailureAnalyzerAgent:
                         failure_type="AssertionError",
                         message="Test assertion failed",
                         traceback=combined[:1000],
-                        likely_files=["calculator.py"],
+                        likely_files=[],
                     ))
             elif line.startswith("FAILED ") and "::" in line:
                 part = line.split("FAILED ")[1].split()[0]

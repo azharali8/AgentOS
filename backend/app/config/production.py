@@ -63,6 +63,23 @@ class ProductionSettings(BaseSettings):
     LOCKOUT_DURATION_SECONDS: int = 900  # 15 minutes
     MAX_REQUEST_BODY_SIZE: int = 2 * 1024 * 1024  # 2 MB
 
+    # Phase 16 PostgreSQL + Redis Distributed Coordination
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_MAX_CONNECTIONS: int = 20
+    REDIS_SOCKET_TIMEOUT: float = 5.0
+    REDIS_RETRY_LIMIT: int = 3
+    QUEUE_BACKEND: str = "sqlite"          # "sqlite" | "redis"
+    RATE_LIMIT_BACKEND: str = "memory"     # "memory" | "redis"
+    EVENT_BACKEND: str = "db"              # "db" | "redis" | "both"
+    LEASE_TTL: int = 30
+    HEARTBEAT_INTERVAL: int = 10
+    WORKER_STALE_TIMEOUT: int = 60
+    SCHEDULER_LOCK_TTL: int = 15
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_RECYCLE_SECONDS: int = 300
+    DB_POOL_TIMEOUT_SECONDS: int = 30
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
@@ -79,6 +96,11 @@ class ProductionSettings(BaseSettings):
                 raise ProductionConfigError("API_KEY_SALT must be configured with a secure random value in production.")
             if not Path(self.WORKSPACE_ROOT).is_absolute():
                 raise ProductionConfigError("WORKSPACE_ROOT must be an absolute path in production.")
+            if not self.REDIS_URL:
+                raise ProductionConfigError("REDIS_URL must be configured in production mode.")
+            if self.DATABASE_URL.startswith("sqlite"):
+                raise ProductionConfigError("Production environment requires PostgreSQL (DATABASE_URL cannot be sqlite).")
+
 
     class Config:
         env_file = ".env"

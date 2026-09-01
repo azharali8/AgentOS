@@ -38,8 +38,9 @@ class ReadResult:
 class CodeReader:
     """Line-windowed code reader with workspace and sensitive-file protection."""
 
-    def __init__(self) -> None:
-        self._root = Path(settings.WORKSPACE_ROOT).resolve()
+    @property
+    def _root(self) -> Path:
+        return Path(settings.WORKSPACE_ROOT).resolve()
 
     def read(
         self,

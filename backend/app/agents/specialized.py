@@ -73,7 +73,8 @@ class ResearchAgent:
         if not target_files:
             target_files = self.intelligence.find_relevant_files(subtask.description, max_files=3)
             if not target_files:
-                target_files = ["calculator.py"]
+                target_files = self.intelligence.get_first_workspace_files(max_files=2)
+
 
         evidence: Dict[str, Any] = {}
 
@@ -123,11 +124,17 @@ class CodingAgent:
         self.validator = PatchValidator()
         self.applier = PatchApplier()
         self.reader = CodeReader()
+        self.intelligence = RepoIntelligence()
+
 
     def formulate_patch(self, subtask: SubTask, diagnosis_evidence: Optional[Dict[str, Any]] = None) -> Patch:
         """Create a candidate Patch object based on diagnosis or instruction."""
         task_id = subtask.task_id
-        target_files = subtask.target_files if subtask.target_files else ["calculator.py"]
+        target_files = subtask.target_files if subtask.target_files else self.intelligence.get_first_workspace_files(max_files=1)
+        if not target_files:
+            # Workspace is empty — return an empty patch rather than assuming a filename
+            target_files = []
+
         patch_files: List[PatchFile] = []
 
         for target_file in target_files:

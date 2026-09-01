@@ -84,14 +84,43 @@ class RecoveryService:
                             recovered.append(task_id)
                             continue
 
-                    # If no running execution was recorded or it's safe
                     recovered.append(task_id)
                 elif status in (TaskStatus.PENDING.value, TaskStatus.PLANNING.value):
                     recovered.append(task_id)
+
+        # ── Phase 15: Distributed Worker & Lease Crash Recovery ─────────────────
+        recovered_workers = []
+        expired_leases_count = 0
+
+        try:
+            from backend.app.services.worker_manager import WorkerManager
+            from backend.app.services.task_lease import TaskLeaseService
+            from backend.app.services.task_queue import TaskQueue
+
+            # 1. Sweep and detect stale/unhealthy workers
+            health_summary = WorkerManager.check_worker_health()
+            recovered_workers = health_summary.get("unhealthy_workers", []) + health_summary.get("offline_workers", [])
+
+            # 2. Expire old leases and requeue tasks
+            expired_leases = TaskLeaseService.get_expired_leases()
+            for l in expired_leases:
+                TaskLeaseService.expire_lease(l.lease_id)
+                TaskQueue.requeue(l.task_id, reason=f"Lease {l.lease_id} expired on worker {l.worker_id}")
+                expired_leases_count += 1
+                EventService.record_event(
+                    task_id=l.task_id,
+                    event_type="TASK_WORKER_RECOVERED",
+                    payload={"worker_id": l.worker_id, "lease_id": l.lease_id},
+                )
+        except Exception as exc:
+            logger.warning("Distributed worker recovery encountered error: %s", exc)
 
         return {
             "recovered": recovered,
             "waiting_approval": waiting_approval,
             "recovery_required": recovery_required,
             "failed_unrecoverable": failed_unrecoverable,
+            "recovered_workers": recovered_workers,
+            "expired_leases_recovered": expired_leases_count,
         }
+

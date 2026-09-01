@@ -623,6 +623,105 @@ def get_system_audit_logs(
     return [l.model_dump() for l in logs]
 
 
+# ── Phase 15: Distributed Worker & Queue APIs ────────────────────────────────
+
+@system_v1.get("/workers")
+def list_workers_v1(user: AuthenticatedUser = Depends(get_current_user)) -> List[Dict[str, Any]]:
+    """List all registered distributed workers with live status and capacity."""
+    from backend.app.services.worker_manager import WorkerManager
+    return WorkerManager.list_workers()
+
+
+@system_v1.get("/workers/{worker_id}")
+def get_worker_v1(worker_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """Get details of a specific distributed worker."""
+    from backend.app.services.worker_manager import WorkerManager
+    w = WorkerManager.get_worker(worker_id)
+    if not w:
+        raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
+    return w
+
+
+@system_v1.post("/workers/{worker_id}/drain")
+def drain_worker_v1(
+    worker_id: str,
+    user: AuthenticatedUser = Depends(require_role(UserRole.ADMIN)),
+) -> Dict[str, Any]:
+    """Gracefully drain worker to accept no new tasks (ADMIN only)."""
+    from backend.app.services.worker_manager import WorkerManager
+    ok = WorkerManager.drain_worker(worker_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
+    return {"worker_id": worker_id, "status": "DRAINING", "message": "Worker is draining active tasks"}
+
+
+@system_v1.post("/workers/{worker_id}/recover")
+def recover_worker_v1(
+    worker_id: str,
+    user: AuthenticatedUser = Depends(require_role(UserRole.ADMIN)),
+) -> Dict[str, Any]:
+    """Trigger backend lease recovery for a stale/failed worker (ADMIN only)."""
+    from backend.app.services.worker_manager import WorkerManager
+    from backend.app.services.task_lease import TaskLeaseService
+    from backend.app.services.task_queue import TaskQueue
+
+    w = WorkerManager.get_worker(worker_id)
+    if not w:
+        raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
+
+    expired_leases = TaskLeaseService.get_expired_leases()
+    requeued_count = 0
+    for l in expired_leases:
+        if l.worker_id == worker_id:
+            TaskLeaseService.expire_lease(l.lease_id)
+            TaskQueue.requeue(l.task_id, reason=f"Manual recovery of worker {worker_id}")
+            requeued_count += 1
+
+    return {
+        "worker_id": worker_id,
+        "recovered": True,
+        "tasks_requeued": requeued_count,
+        "message": f"Worker '{worker_id}' state swept and {requeued_count} orphaned task leases requeued.",
+    }
+
+
+@system_v1.get("/queue")
+def get_system_queue(user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """Get distributed queue statistics and pending tasks."""
+    from backend.app.services.task_queue import TaskQueue
+    stats = TaskQueue.get_stats()
+    items = TaskQueue.list_queue(limit=20)
+    return {
+        "stats": stats,
+        "entries": items,
+    }
+
+
+@tasks_v1.get("/{task_id}/worker")
+def get_task_worker_v1(
+    task_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get current distributed worker lease and fencing token for a task."""
+    from backend.app.services.task_lease import TaskLeaseService
+    from backend.app.services.task_queue import TaskQueue
+
+    lease = TaskLeaseService.get_active_lease(task_id)
+    queue_entry = TaskQueue.get_entry(task_id)
+
+    if not lease and not queue_entry:
+        raise HTTPException(status_code=404, detail=f"No worker lease or queue record found for task '{task_id}'")
+
+    return {
+        "task_id": task_id,
+        "lease": lease,
+        "assigned_worker_id": queue_entry.assigned_worker_id if queue_entry else (lease.get("worker_id") if lease else None),
+        "fencing_token": lease.get("fencing_token") if lease else (queue_entry.current_fencing_token if queue_entry else 0),
+        "queue_status": queue_entry.status if queue_entry else None,
+    }
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Human-in-the-Loop Approvals API
 # ─────────────────────────────────────────────────────────────────────────────
@@ -774,6 +873,250 @@ def get_workspace_file(
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {str(exc)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5b. Workspace Configuration API — Active Project Switching
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WorkspaceSetRootRequest(BaseModel):
+    path: str = Field(..., min_length=1, description="Absolute path to the project directory on the server")
+    name: str = Field(default="", description="Optional display name for the project")
+
+
+@workspace_v1.post("/set-root")
+def set_workspace_root(
+    req: WorkspaceSetRootRequest,
+    user: AuthenticatedUser = Depends(require_role(UserRole.DEVELOPER)),
+) -> Dict[str, Any]:
+    """
+    Switch the active project workspace at runtime.
+
+    Validates the supplied directory path, prevents pointing into the AgentOS
+    source tree, updates WORKSPACE_ROOT for the running process, and persists
+    the new value to the .env file for across-restart durability.
+
+    Security checks:
+    - Path must exist and be a directory
+    - Path must not be inside the AgentOS installation directory
+    - Path must be an absolute, canonical path
+    - No null bytes, no UNC paths, no traversal sequences
+    """
+    import os
+    from pathlib import Path
+
+    raw = req.path.strip()
+
+    # Reject null bytes and UNC paths
+    if "\0" in raw:
+        raise HTTPException(status_code=400, detail="Null byte detected in path.")
+    if raw.startswith("\\\\") or raw.startswith("//"):
+        raise HTTPException(status_code=400, detail="UNC network paths are not supported.")
+    if ".." in Path(raw).parts:
+        raise HTTPException(status_code=400, detail="Path traversal sequences are not allowed.")
+
+    try:
+        target = Path(raw).resolve(strict=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}")
+
+    # Must be absolute after resolution
+    if not target.is_absolute():
+        raise HTTPException(status_code=400, detail="Path must be an absolute directory path.")
+
+    # Must exist and be a directory
+    if not target.exists():
+        raise HTTPException(status_code=400, detail=f"Directory does not exist: {target}")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"Path is not a directory: {target}")
+
+    # Prevent pointing at the AgentOS installation directory
+    from backend.app.config.settings import PROJECT_ROOT
+    agentos_root = Path(PROJECT_ROOT).resolve()
+    try:
+        target.relative_to(agentos_root)
+        # If we get here, target is inside agentos_root — reject it
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cannot use the AgentOS installation directory as the workspace root. "
+                "Please choose an external project directory."
+            ),
+        )
+    except ValueError:
+        pass  # Good — target is outside agentos_root
+
+    # Count files for the response (non-recursive, top-level only)
+    try:
+        items = list(target.iterdir())
+        files_count = sum(1 for i in items if i.is_file())
+        dirs_count = sum(1 for i in items if i.is_dir())
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied reading directory contents.")
+
+    # Update WORKSPACE_ROOT in the running process
+    settings.WORKSPACE_ROOT = str(target)
+    os.environ["WORKSPACE_ROOT"] = str(target)
+
+    # Persist to .env file for across-restart durability
+    # Only updates the WORKSPACE_ROOT line; all other settings are preserved.
+    env_path = agentos_root / ".env"
+    try:
+        if env_path.exists():
+            lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+            updated = False
+            for i, line in enumerate(lines):
+                if line.startswith("WORKSPACE_ROOT="):
+                    lines[i] = f"WORKSPACE_ROOT={target}\n"
+                    updated = True
+                    break
+            if not updated:
+                lines.append(f"WORKSPACE_ROOT={target}\n")
+            env_path.write_text("".join(lines), encoding="utf-8")
+        else:
+            env_path.write_text(f"WORKSPACE_ROOT={target}\n", encoding="utf-8")
+    except Exception as exc:
+        # Non-fatal: runtime is already updated, but warn about persistence
+        import logging
+        logging.getLogger("agentos.workspace").warning(
+            "Could not persist WORKSPACE_ROOT to .env: %s", exc
+        )
+
+    display_name = req.name.strip() or target.name
+
+    return {
+        "status": "ok",
+        "root": display_name,
+        "path": str(target),
+        "files_count": files_count,
+        "dirs_count": dirs_count,
+        "persisted": env_path.exists(),
+    }
+
+
+@workspace_v1.get("/info")
+def get_workspace_info(
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Return metadata about the currently active workspace.
+    Does not expose sensitive configuration or secrets.
+    """
+    from pathlib import Path
+    root = WorkspaceService.get_workspace_root()
+
+    # Count top-level items
+    try:
+        items = list(root.iterdir())
+        files_count = sum(1 for i in items if i.is_file())
+        dirs_count = sum(1 for i in items if i.is_dir())
+        is_empty = len(items) == 0 or (len(items) == 1 and items[0].name == ".gitkeep")
+    except Exception:
+        files_count = 0
+        dirs_count = 0
+        is_empty = True
+
+    # Detect git branch safely
+    git_branch = None
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            cwd=str(root),
+        )
+        if result.returncode == 0:
+            git_branch = result.stdout.strip() or None
+    except Exception:
+        pass
+
+    return {
+        "root": root.name,
+        "is_empty": is_empty,
+        "files_count": files_count,
+        "dirs_count": dirs_count,
+        "git_branch": git_branch,
+    }
+
+
+class CreateProjectRequestV1(BaseModel):
+    name: str = Field(..., min_length=1, description="Project name")
+    location: str = Field(..., min_length=1, description="Parent directory where the project will be created")
+    instruction: Optional[str] = Field(default="", description="Natural-language project instruction")
+    auto_start_task: bool = Field(default=True, description="Whether to automatically start an engineering task")
+
+
+@workspace_v1.post("/create-project")
+def create_project_v1(
+    req: CreateProjectRequestV1,
+    user: AuthenticatedUser = Depends(require_role(UserRole.DEVELOPER)),
+) -> Dict[str, Any]:
+    """
+    Create a new software project from scratch and establish it as the active workspace.
+    Optionally launches the Supervisor multi-agent engineering workflow to implement the instruction.
+    """
+    from backend.app.services.project_creator import (
+        ProjectCreatorService,
+        ProjectCreationError,
+        ProjectConflictError,
+    )
+
+    try:
+        project_meta = ProjectCreatorService.create_project(
+            name=req.name,
+            location=req.location,
+            instruction=req.instruction,
+        )
+    except ProjectConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except ProjectCreationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create project: {str(exc)}")
+
+    task_id = None
+    if req.instruction and req.instruction.strip() and req.auto_start_task:
+        from backend.app.models.task import TaskRequest
+        from backend.app.services.task_service import TaskService
+        from backend.app.services.multi_agent_service import MultiAgentService
+        import threading
+
+        task_req = TaskRequest(instruction=req.instruction.strip())
+        task_record = TaskService.create_task(request=task_req)
+        task_id = task_record.task_id
+
+        EventService.record_event(
+            task_id=task_id,
+            event_type="PROJECT_CREATED",
+            payload={
+                "project_name": req.name,
+                "project_path": project_meta["path"],
+                "instruction": req.instruction.strip(),
+            },
+        )
+
+        def _bg_execute():
+            try:
+                TaskService.update_task_status(task_record.task_id, TaskStatus.PLANNING)
+                MultiAgentService.start_task(instruction=req.instruction.strip(), sync=True)
+            except Exception as exc:
+                TaskService.set_error(task_record.task_id, str(exc))
+
+        threading.Thread(
+            target=_bg_execute,
+            daemon=True,
+            name=f"proj-exec-{task_id[:8]}",
+        ).start()
+
+    return {
+        "status": "ok",
+        "project_name": project_meta["project_name"],
+        "path": project_meta["path"],
+        "git_initialized": project_meta.get("git_initialized", False),
+        "task_id": task_id,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

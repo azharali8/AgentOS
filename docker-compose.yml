@@ -1,6 +1,45 @@
-version: "3.9"
+﻿version: "3.9"
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: 
+      POSTGRES_USER: 
+      POSTGRES_PASSWORD: 
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentos -d agentos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - agentos-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: agentos-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - agentos-net
+
   backend:
     build:
       context: .
@@ -9,22 +48,29 @@ services:
     restart: unless-stopped
     environment:
       - AGENTOS_ENV=production
-      - DATABASE_URL=sqlite:////app/data/agentos.db
+      - DATABASE_URL=postgresql://agentos:agentos_secure_password_123@postgres:5432/agentos
+      - REDIS_URL=redis://redis:6379/0
+      - QUEUE_BACKEND=redis
+      - RATE_LIMIT_BACKEND=redis
+      - EVENT_BACKEND=both
       - WORKSPACE_BASE_DIR=/app/workspace
       - ARTIFACTS_DIR=/app/artifacts
       - LOG_LEVEL=INFO
-      # Secrets should be injected via Docker secrets or .env.production (not committed)
-      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - SESSION_SECRET_KEY=
+      - ANTHROPIC_API_KEY=
+      - OPENAI_API_KEY=
     ports:
       - "8000:8000"
     volumes:
-      # Named persistent volumes — survive container restarts and rebuilds
       - agentos-data:/app/data
       - agentos-workspace:/app/workspace
       - agentos-artifacts:/app/artifacts
       - agentos-logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -54,24 +100,28 @@ services:
       - agentos-net
 
 volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
   agentos-data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${DATA_HOST_PATH:-./data}
+      device: 
   agentos-workspace:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${WORKSPACE_HOST_PATH:-./workspace}
+      device: 
   agentos-artifacts:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${ARTIFACTS_HOST_PATH:-./artifacts}
+      device: 
   agentos-logs:
     driver: local
 

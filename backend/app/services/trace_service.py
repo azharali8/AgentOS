@@ -56,6 +56,9 @@ class ExecutionTrace(BaseModel):
     created_at: str
     completed_at: Optional[str] = None
     duration_seconds: float = 0.0
+    worker_id: Optional[str] = None
+    lease_id: Optional[str] = None
+    fencing_token: Optional[int] = None
     nodes: List[AgentTraceNode] = Field(default_factory=list)
     recovery_events: List[Dict[str, Any]] = Field(default_factory=list)
     artifacts_count: int = 0
@@ -138,6 +141,17 @@ class TraceService:
         # Count artifacts
         artifacts = ArtifactService.list_by_task(task_id_val)
 
+        # Retrieve active or recent worker lease info
+        from backend.app.services.task_lease import TaskLeaseService
+        from backend.app.services.task_queue import TaskQueue
+
+        lease_info = TaskLeaseService.get_active_lease(task_id_val)
+        queue_entry = TaskQueue.get_entry(task_id_val)
+
+        worker_id_val = lease_info.get("worker_id") if lease_info else (queue_entry.assigned_worker_id if queue_entry else None)
+        lease_id_val = lease_info.get("lease_id") if lease_info else None
+        fencing_token_val = lease_info.get("fencing_token") if lease_info else (queue_entry.current_fencing_token if queue_entry else None)
+
         return ExecutionTrace(
             task_id=task_id_val,
             instruction=instruction_val,
@@ -145,6 +159,9 @@ class TraceService:
             created_at=created_at_val,
             completed_at=completed_at_val,
             duration_seconds=duration,
+            worker_id=worker_id_val,
+            lease_id=lease_id_val,
+            fencing_token=fencing_token_val,
             nodes=nodes,
             recovery_events=recovery_events,
             artifacts_count=len(artifacts),

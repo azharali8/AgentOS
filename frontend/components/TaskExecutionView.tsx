@@ -3,18 +3,17 @@
 import React, { useState } from 'react';
 import {
   ArrowLeft,
-  CheckCircle2,
-  Clock,
-  Terminal,
-  Activity,
-  AlertCircle,
-  Code2,
-  FileCheck2,
-  Shield,
-  Layers,
   ChevronRight,
-  RefreshCw,
-  FileText,
+  ChevronDown,
+  Folder,
+  FileCode2,
+  Send,
+  Bot,
+  Play,
+  CheckCircle2,
+  AlertTriangle,
+  Sparkles,
+  Terminal,
 } from 'lucide-react';
 import { Task, TaskEvent } from '../types';
 
@@ -28,244 +27,242 @@ interface TaskExecutionViewProps {
 
 export const TaskExecutionView: React.FC<TaskExecutionViewProps> = ({
   task,
-  events,
+  events = [],
   isStreaming,
   onBack,
   onResolveApproval,
 }) => {
-  const [selectedEvent, setSelectedEvent] = useState<TaskEvent | null>(null);
-  const [resolving, setResolving] = useState(false);
+  const [activeTab, setActiveTab] = useState<'execution' | 'code' | 'diff' | 'tests' | 'review'>('execution');
+  const [supervisorPrompt, setSupervisorPrompt] = useState('');
 
-  // Group and map events
-  const toolEvents = events.filter((e) =>
-    ['TOOL_INVOCATION', 'TOOL_RESULT', 'SUBTASK_COMPLETED', 'SUBTASK_CREATED'].includes(e.event_type)
-  );
-
-  const approvalEvents = events.filter((e) =>
-    ['APPROVAL_REQUIRED', 'APPROVAL_RESOLVED', 'HUMAN_APPROVAL_REQUESTED'].includes(e.event_type)
-  );
-
-  const handleApprovalAction = async (approved: boolean) => {
-    if (!task.approval_id || !onResolveApproval) return;
-    setResolving(true);
-    try {
-      await onResolveApproval(task.approval_id, approved);
-    } finally {
-      setResolving(false);
-    }
-  };
+  const statusColor =
+    task.status === 'COMPLETED'
+      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      : task.status === 'WAITING_APPROVAL'
+      ? 'bg-amber-50 text-amber-700 border-amber-200'
+      : task.status === 'FAILED'
+      ? 'bg-rose-50 text-rose-700 border-rose-200'
+      : 'bg-indigo-50 text-indigo-700 border-indigo-200';
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-7xl mx-auto space-y-4 pb-12">
       {/* Top Header Bar */}
-      <div className="flex items-center justify-between">
-        <button
-          onClick={onBack}
-          className="flex items-center space-x-2 text-xs font-mono text-slate-400 hover:text-slate-200 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Back to Tasks</span>
-        </button>
-
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
         <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2 text-xs font-mono bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-md">
-            <span className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
-            <span className="text-slate-300">{isStreaming ? 'STREAMING ACTIVE' : 'STREAM IDLE'}</span>
-          </div>
-
-          <span
-            className={`text-xs px-3 py-1 rounded font-mono font-bold ${
-              task.status === 'COMPLETED'
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                : task.status === 'FAILED'
-                ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
-                : task.status === 'WAITING_APPROVAL'
-                ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30 animate-pulse'
-                : 'bg-blue-500/10 text-blue-400 border border-blue-500/30'
-            }`}
+          <button
+            onClick={onBack}
+            className="flex items-center space-x-1 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 px-2.5 py-1 rounded-lg transition-colors shadow-2xs"
           >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Back</span>
+          </button>
+
+          <div className="flex items-center space-x-2">
+            <span className="px-2.5 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-bold rounded-md font-mono">
+              #{task.task_id.slice(0, 8)}
+            </span>
+            <h1 className="text-base font-bold text-slate-900 truncate max-w-lg">
+              {task.instruction}
+            </h1>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-2.5">
+          <span className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border ${statusColor}`}>
             {task.status}
           </span>
         </div>
       </div>
 
-      {/* Task Overview Card */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3 shadow-sm">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Engineering Objective</span>
-          <span className="text-xs text-slate-500 font-mono">ID: {task.task_id}</span>
-        </div>
-        <p className="text-sm font-medium text-slate-100 font-mono">{task.instruction}</p>
-
-        {task.result_summary && (
-          <div className="p-3.5 bg-slate-950/80 rounded-lg border border-slate-800 mt-2">
-            <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider block mb-1">
-              Final Supervisor Response & Evidence
+      {/* 3-Column IDE Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+        {/* Left: Task Summary & Meta */}
+        <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200/90 p-4 space-y-4 shadow-2xs font-mono text-xs">
+          <div className="space-y-2">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block font-sans">
+              Task Details
             </span>
-            <p className="text-xs text-slate-300 font-mono whitespace-pre-wrap">{task.result_summary}</p>
-          </div>
-        )}
-
-        {task.error && (
-          <div className="p-3.5 bg-rose-950/40 rounded-lg border border-rose-800/40 mt-2 flex items-start space-x-2">
-            <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
-            <div>
-              <span className="text-xs font-semibold text-rose-300 uppercase tracking-wider block">
-                Execution Error / Halt
-              </span>
-              <p className="text-xs text-rose-300 font-mono mt-0.5">{task.error}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Human Approval Banner if waiting */}
-        {task.status === 'WAITING_APPROVAL' && (
-          <div className="p-4 bg-amber-950/40 border border-amber-500/40 rounded-lg mt-3 flex items-center justify-between">
-            <div className="flex items-start space-x-3">
-              <Shield className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="space-y-2 text-slate-700 font-sans">
               <div>
-                <h4 className="text-xs font-bold text-amber-200 uppercase tracking-wider">
-                  Human Approval Gate Triggered
-                </h4>
-                <p className="text-xs text-amber-300/80 font-mono mt-0.5">
-                  Supervisor paused execution before applying high-risk patch / modifications.
-                </p>
-                {task.approval_id && (
-                  <p className="text-[11px] text-amber-400 font-mono mt-1">Approval ID: {task.approval_id}</p>
-                )}
+                <span className="text-slate-400 text-[10px] block">Created At</span>
+                <span className="text-xs font-mono">{new Date(task.created_at).toLocaleTimeString()}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] block">Priority</span>
+                <span className="text-xs font-mono">P{task.priority || 1}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] block">Assigned Agent</span>
+                <span className="text-xs font-mono text-indigo-600">{task.assigned_agent || 'Supervisor'}</span>
               </div>
             </div>
-            {onResolveApproval && task.approval_id && (
-              <div className="flex items-center space-x-2">
-                <button
-                  disabled={resolving}
-                  onClick={() => handleApprovalAction(false)}
-                  className="px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 rounded text-xs font-mono transition-colors"
-                >
-                  Reject
-                </button>
-                <button
-                  disabled={resolving}
-                  onClick={() => handleApprovalAction(true)}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-mono font-bold transition-colors shadow-sm"
-                >
-                  {resolving ? 'Authorizing...' : 'Approve & Resume'}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Main Console Grid: Dynamic Event Timeline + Tool Inspector */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Dynamic Chronological Timeline */}
-        <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col h-[520px]">
-          <div className="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
-            <h3 className="font-semibold text-slate-200 flex items-center text-xs uppercase tracking-wider">
-              <Terminal className="w-4 h-4 mr-2 text-blue-400" />
-              Dynamic Execution Timeline ({events.length} Events)
-            </h3>
-            <span className="text-[11px] text-slate-400 font-mono">Append-Only Audit</span>
           </div>
 
-          <div className="flex-1 bg-slate-950 border border-slate-800/80 rounded-lg p-3 font-mono text-xs overflow-y-auto space-y-2">
-            {events.length === 0 ? (
-              <div className="text-slate-600 text-center py-16">
-                <Clock className="w-6 h-6 mx-auto mb-2 opacity-50" />
-                <p>Waiting for live Supervisor events...</p>
-              </div>
-            ) : (
-              events.map((ev, idx) => {
-                const isSelected = selectedEvent?.event_id === ev.event_id;
-                return (
-                  <div
-                    key={ev.event_id || idx}
-                    onClick={() => setSelectedEvent(ev)}
-                    className={`flex items-start justify-between p-2 rounded cursor-pointer transition-colors border ${
-                      isSelected
-                        ? 'bg-blue-950/40 border-blue-500/50'
-                        : 'bg-slate-900/40 border-slate-800/60 hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <div className="flex items-start space-x-2 truncate">
-                      <span className="text-slate-500 text-[10px] whitespace-nowrap pt-0.5">
-                        {new Date(ev.timestamp).toLocaleTimeString()}
-                      </span>
-                      <span
-                        className={`text-[11px] font-bold whitespace-nowrap ${
-                          ev.event_type.includes('COMPLETED')
-                            ? 'text-emerald-400'
-                            : ev.event_type.includes('FAILED') || ev.event_type.includes('ERROR')
-                            ? 'text-rose-400'
-                            : ev.event_type.includes('APPROVAL')
-                            ? 'text-amber-400'
-                            : 'text-blue-400'
-                        }`}
-                      >
-                        [{ev.event_type}]
-                      </span>
-                      <span className="text-slate-300 truncate text-[11px]">
-                        {ev.payload?.description || ev.payload?.instruction || ev.payload?.agent || JSON.stringify(ev.payload || {})}
-                      </span>
-                    </div>
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-600 flex-shrink-0 ml-2" />
-                  </div>
-                );
-              })
-            )}
+          {/* Real Events Count */}
+          <div className="pt-3 border-t border-slate-100 space-y-2">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block font-sans">
+              Telemetry
+            </span>
+            <div className="flex flex-wrap gap-1.5 text-[11px]">
+              <span className="px-2 py-0.5 bg-slate-100 rounded-md text-slate-700">{events.length} events</span>
+              {isStreaming && (
+                <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-md flex items-center space-x-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
+                  <span>Streaming</span>
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Structured Event / Tool Call / Patch Inspector */}
-        <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col h-[520px]">
-          <div className="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
-            <h3 className="font-semibold text-slate-200 flex items-center text-xs uppercase tracking-wider">
-              <Code2 className="w-4 h-4 mr-2 text-emerald-400" />
-              Event & Tool Call Inspector
-            </h3>
-            {selectedEvent && (
-              <span className="text-[10px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-                {selectedEvent.event_type}
-              </span>
+        {/* Center: Live Execution & Real Terminal Stream (6 cols) */}
+        <div className="lg:col-span-6 space-y-3">
+          {/* Tabs Row */}
+          <div className="flex items-center space-x-1 bg-white p-1 rounded-xl border border-slate-200/90 shadow-2xs overflow-x-auto">
+            {[
+              { id: 'execution', label: 'Live Trace', badge: `${events.length} events` },
+              { id: 'diff', label: 'Diff / Changes' },
+              { id: 'tests', label: 'Tests' },
+            ].map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as any)}
+                  className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    isActive
+                      ? 'bg-slate-100 text-slate-900 font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  {tab.badge && (
+                    <span className="text-[10px] px-1.5 py-0.2 rounded font-mono font-semibold bg-slate-200 text-slate-700">
+                      {tab.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Live Trace or Diff Container */}
+          <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden shadow-2xs min-h-[280px]">
+            {activeTab === 'execution' && (
+              <div className="p-4 space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs">
+                  <span className="font-bold text-slate-900">Execution Events</span>
+                  <span className="text-slate-400 font-mono text-[11px]">{task.status}</span>
+                </div>
+
+                {events.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400 text-xs">
+                    {isStreaming ? 'Connecting to live event stream...' : 'No execution events recorded yet.'}
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+                    {events.map((ev, i) => (
+                      <div key={ev.event_id || i} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-indigo-700 font-mono text-[11px]">{ev.event_type}</span>
+                          <span className="text-slate-400 font-mono text-[10px]">{ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : ''}</span>
+                        </div>
+                        {ev.payload && (
+                          <pre className="text-[11px] text-slate-600 font-mono bg-white p-2 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap">
+                            {JSON.stringify(ev.payload, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'diff' && (
+              <div className="p-8 text-center text-slate-400 text-xs">
+                {task.result_summary ? (
+                  <div className="text-left font-mono text-xs text-slate-800 whitespace-pre-wrap">
+                    {task.result_summary}
+                  </div>
+                ) : (
+                  'No file mutations or patch diffs generated for this task yet.'
+                )}
+              </div>
+            )}
+
+            {activeTab === 'tests' && (
+              <div className="p-8 text-center text-slate-400 text-xs">
+                No test suite execution recorded for this task yet.
+              </div>
             )}
           </div>
 
-          <div className="flex-1 bg-slate-950 border border-slate-800/80 rounded-lg p-3 font-mono text-xs overflow-y-auto">
-            {selectedEvent ? (
-              <div className="space-y-3">
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-500 block">Event Timestamp</span>
-                  <p className="text-slate-300">{new Date(selectedEvent.timestamp).toISOString()}</p>
-                </div>
+          {/* Integrated Dark Terminal Stream */}
+          <div className="bg-[#0f172a] text-slate-200 rounded-2xl p-3.5 font-mono text-xs space-y-2 shadow-sm">
+            <div className="flex items-center space-x-3 text-[11px] text-slate-400 border-b border-slate-800 pb-2">
+              <span className="text-white font-bold flex items-center space-x-1.5">
+                <Terminal className="w-3.5 h-3.5" />
+                <span>Console Logs</span>
+              </span>
+              {isStreaming && <span className="text-emerald-400 text-[10px]">● live</span>}
+            </div>
+            <div className="space-y-1 select-text pt-1 text-[11px] max-h-40 overflow-y-auto">
+              <p className="text-slate-400">[AgentOS] Task #{task.task_id.slice(0, 8)} status: {task.status}</p>
+              {events.map((e, idx) => (
+                <p key={idx} className="text-slate-300">
+                  <span className="text-indigo-400">&gt;</span> [{e.event_type}] {JSON.stringify(e.payload || {})}
+                </p>
+              ))}
+            </div>
+          </div>
+        </div>
 
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-500 block">Task Identifier</span>
-                  <p className="text-slate-400">{selectedEvent.task_id}</p>
-                </div>
-
-                {selectedEvent.step_id && (
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Step / Subtask ID</span>
-                    <p className="text-slate-400">{selectedEvent.step_id}</p>
-                  </div>
-                )}
-
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">
-                    Redacted Payload & Arguments
-                  </span>
-                  <pre className="bg-slate-900 border border-slate-800 p-2.5 rounded text-[11px] text-slate-300 overflow-x-auto whitespace-pre-wrap">
-                    {JSON.stringify(selectedEvent.payload || {}, null, 2)}
-                  </pre>
-                </div>
+        {/* Right: Supervisor Interaction (3 cols) */}
+        <div className="lg:col-span-3 space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200/90 p-4 space-y-3 shadow-2xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <div className="flex items-center space-x-2">
+                <Bot className="w-4 h-4 text-indigo-600" />
+                <h3 className="text-xs font-bold text-slate-900">Supervisor</h3>
               </div>
-            ) : (
-              <div className="text-slate-600 text-center py-20">
-                <FileText className="w-6 h-6 mx-auto mb-2 opacity-50" />
-                <p>Click any event in the timeline to inspect arguments, tool execution, and output.</p>
-              </div>
-            )}
+              <span className="flex items-center space-x-1 text-[11px] text-indigo-600 font-semibold">
+                <span>{task.status}</span>
+              </span>
+            </div>
+
+            <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-700 leading-relaxed space-y-1">
+              <p>Task #{task.task_id.slice(0, 8)} is in state <strong>{task.status}</strong>.</p>
+              {task.error && <p className="text-rose-600 font-mono text-[11px]">{task.error}</p>}
+            </div>
+
+            {/* Prompt Input Box */}
+            <div className="relative">
+              <input
+                type="text"
+                value={supervisorPrompt}
+                onChange={(e) => setSupervisorPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && supervisorPrompt.trim()) {
+                    e.preventDefault();
+                    setSupervisorPrompt('');
+                  }
+                }}
+                placeholder="Message Supervisor... (Press Enter)"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-8 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500/30"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (supervisorPrompt.trim()) {
+                    setSupervisorPrompt('');
+                  }
+                }}
+                className="w-6 h-6 rounded-lg bg-indigo-600 text-white flex items-center justify-center absolute right-1.5 top-1.5 hover:bg-indigo-700"
+              >
+                <Send className="w-3 h-3" />
+              </button>
+            </div>
           </div>
         </div>
       </div>

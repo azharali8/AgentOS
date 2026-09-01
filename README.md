@@ -322,9 +322,107 @@ cd frontend; npm.cmd run build; cd ..
 
 ---
 
+## Create New Projects From Scratch
+
+AgentOS supports two distinct project onboarding modes:
+
+### Mode 1: Connect Existing Project
+
+Point AgentOS at an existing software directory on your machine. AgentOS will index your files, extract AST symbols, assemble repository intelligence, and enable all specialized agents to work on your codebase immediately.
+
+### Mode 2: Create New Project From Scratch
+
+Give AgentOS a project name, parent directory, and natural-language instruction. AgentOS will:
+
+1. **Create a safe project directory** at `<location>/<name>`.
+2. **Initialize base files** — a `README.md` and `.gitignore`.
+3. **Initialize a Git repository** (if available on the machine).
+4. **Switch the active `WORKSPACE_ROOT`** to the newly created project directory.
+5. **Submit the instruction to the Supervisor** as a standard engineering task.
+6. **Execute the full engineering workflow** using existing specialized agents.
+
+**Canonical Workflow:**
+
+```text
+User Prompt ("Create a FastAPI app with JWT and tests")
+        |
+        v
+POST /api/v1/workspace/create-project
+        |
+ProjectCreatorService
+  → validate project name and location
+  → prevent path traversal & AgentOS self-targeting
+  → detect existing directory conflicts
+  → create project directory
+  → write README.md + .gitignore
+  → initialize Git
+  → switch WORKSPACE_ROOT
+        |
+        v
+TaskService.create_task (instruction passed as normal engineering task)
+        |
+        v
+SupervisorAgent
+  → understand requirements
+  → decompose into engineering plan
+  → delegate to specialized agents:
+        CodingAgent    → scaffold modules, APIs, configuration
+        TestingAgent   → write and run test suites
+        DebuggerAgent  → diagnose and fix test failures
+        ReviewerAgent  → verify code quality and security
+  → human approval where required
+        |
+        v
+Completed project, indexed and active as persistent workspace
+```
+
+**Follow-up tasks on the same project:**
+
+Once the project is created, all subsequent prompts operate naturally against the same workspace:
+
+- `"Add email authentication."`
+- `"Write integration tests for the auth module."`
+- `"Run the tests and fix failures."`
+- `"Perform a security review."`
+
+**Safety guarantees:**
+
+- Project directories can only be created **outside** the AgentOS installation tree.
+- Path traversal (`..`), null bytes, and UNC paths are rejected.
+- If the target directory already exists and is non-empty, creation is **rejected** (HTTP 409 Conflict).
+- If the engineering task fails, the **project directory is preserved**. Failure is tracked in the existing task state machine and visible through the AgentOS task activity view.
+
+**API:**
+
+```http
+POST /api/v1/workspace/create-project
+Content-Type: application/json
+
+{
+  "name": "TaskFlow",
+  "location": "D:/Projects",
+  "instruction": "Create a FastAPI task management API with JWT authentication and PostgreSQL",
+  "auto_start_task": true
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "project_name": "TaskFlow",
+  "path": "D:/Projects/TaskFlow",
+  "git_initialized": true,
+  "task_id": "task-abc12345-..."
+}
+```
+
+---
+
 ## Current Status
 
-AgentOS has completed **Phases 0 through 14**. The system is currently hardened for deployment readiness, featuring durable task execution, bounded context management, model routing, multi-domain rate limiting, non-linear state machines, and disaster recovery.
+AgentOS has completed **Phases 0 through 15**. The system supports dual project onboarding (connect existing + create from scratch), durable task execution, bounded context management, model routing, multi-domain rate limiting, non-linear state machines, and disaster recovery.
 
 ---
 

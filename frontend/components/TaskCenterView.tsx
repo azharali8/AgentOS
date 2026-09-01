@@ -97,7 +97,7 @@ const TaskCard: React.FC<{
 }> = ({ task, onSelect, onCancel }) => {
   const meta = STATUS_META[task.status] ?? {
     label: task.status,
-    color: 'bg-slate-500/10 text-slate-400 border-slate-500/20',
+    color: 'bg-slate-100 text-slate-700 border-slate-200',
     icon: <Clock className="w-3 h-3" />,
   };
   const isActive = ACTIVE_STATUSES.includes(task.status);
@@ -105,22 +105,22 @@ const TaskCard: React.FC<{
 
   return (
     <div
-      className={`group bg-slate-900 border rounded-xl p-5 flex flex-col gap-3 transition-all cursor-pointer hover:border-slate-700 hover:bg-slate-900/90 ${
+      className={`group bg-white border rounded-2xl p-5 flex flex-col gap-3 transition-all cursor-pointer hover:border-slate-300 hover:shadow-xs shadow-2xs ${
         task.status === 'WAITING_APPROVAL'
-          ? 'border-amber-500/40 shadow-sm shadow-amber-500/10'
+          ? 'border-amber-300 ring-2 ring-amber-50'
           : task.status === 'FAILED'
-          ? 'border-rose-500/30'
-          : 'border-slate-800'
+          ? 'border-rose-200'
+          : 'border-slate-200/90'
       }`}
       onClick={onSelect}
     >
       {/* Top row: ID + status badge */}
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-[11px] text-slate-500 shrink-0">
+        <span className="font-mono text-[11px] text-slate-400 shrink-0">
           #{task.task_id.slice(0, 8)}
         </span>
         <span
-          className={`inline-flex items-center gap-1 text-[10px] font-bold font-mono px-2 py-0.5 rounded border ${meta.color} ${
+          className={`inline-flex items-center gap-1 text-[10px] font-bold font-mono px-2 py-0.5 rounded-md border ${meta.color} ${
             meta.pulse ? 'animate-pulse' : ''
           }`}
         >
@@ -130,38 +130,38 @@ const TaskCard: React.FC<{
       </div>
 
       {/* Instruction */}
-      <p className="text-sm font-medium text-slate-200 leading-snug line-clamp-2 group-hover:text-white">
+      <p className="text-sm font-semibold text-slate-900 leading-snug line-clamp-2">
         {task.instruction}
       </p>
 
       {/* Meta row: agent + elapsed */}
       <div className="flex items-center gap-3 flex-wrap">
         {agentLabel && (
-          <span className="inline-flex items-center gap-1 text-[10px] text-indigo-400 font-mono bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded">
+          <span className="inline-flex items-center gap-1 text-[10px] text-indigo-600 font-mono bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded">
             <Bot className="w-3 h-3" />
             {agentLabel}
           </span>
         )}
         {task.status === 'WAITING_APPROVAL' && (
-          <span className="inline-flex items-center gap-1 text-[10px] text-amber-400 font-mono">
+          <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 font-mono font-bold">
             <AlertTriangle className="w-3 h-3" />
             Approval required
           </span>
         )}
-        <span className="ml-auto text-[10px] text-slate-500 font-mono flex items-center gap-1">
+        <span className="ml-auto text-[10px] text-slate-400 font-mono flex items-center gap-1">
           <Clock className="w-3 h-3" />
           {elapsedLabel(task.created_at)}
         </span>
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-2 pt-1 border-t border-slate-800/60">
+      <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
         <button
           onClick={(e) => {
             e.stopPropagation();
             onSelect();
           }}
-          className="flex items-center gap-1 text-[11px] font-mono text-slate-400 hover:text-blue-400 px-2 py-1 rounded hover:bg-blue-500/10 transition-colors"
+          className="flex items-center gap-1 text-[11px] font-mono text-slate-500 hover:text-indigo-600 px-2 py-1 rounded hover:bg-slate-50 transition-colors"
         >
           <ChevronRight className="w-3.5 h-3.5" />
           Inspect
@@ -172,7 +172,7 @@ const TaskCard: React.FC<{
               e.stopPropagation();
               onCancel();
             }}
-            className="flex items-center gap-1 text-[11px] font-mono text-rose-400 hover:text-rose-300 px-2 py-1 rounded hover:bg-rose-500/10 transition-colors"
+            className="flex items-center gap-1 text-[11px] font-mono text-rose-600 hover:text-rose-700 px-2 py-1 rounded hover:bg-rose-50 transition-colors"
           >
             <Ban className="w-3 h-3" />
             Cancel
@@ -239,20 +239,20 @@ export const TaskCenterView: React.FC<TaskCenterViewProps> = ({
   }, [tasks]);
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6 pb-12">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-100">Engineering Task Center</h2>
-          <p className="text-sm text-slate-400 mt-0.5">
-            Submit, supervise, and inspect end-to-end multi-agent execution across bounded workspaces
+          <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight">Tasks</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Submit, supervise, and inspect multi-agent autonomous execution
           </p>
         </div>
         <button
           onClick={() => setShowCreateModal(true)}
-          className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-blue-500/20"
+          className="flex items-center space-x-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition-all shadow-xs"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-3.5 h-3.5" />
           <span>New Task</span>
         </button>
       </div>

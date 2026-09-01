@@ -1,22 +1,20 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  LayoutDashboard,
+  LayoutGrid,
+  GitBranch,
   CheckSquare,
   Bot,
-  GitFork,
-  Brain,
+  Box,
   Activity,
-  Award,
+  Layers,
   Settings,
-  ShieldAlert,
-  FileCheck2,
-  LogOut,
-  User,
-  Shield,
+  ChevronLeft,
+  ChevronRight,
+  Sparkles,
 } from 'lucide-react';
-import { UserProfile, UserRole } from '../types';
+import { UserProfile } from '../types';
 
 interface SidebarProps {
   activeTab: string;
@@ -28,185 +26,105 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   setActiveTab,
-  currentUser,
-  onSignOut,
 }) => {
-  const userRole: UserRole = currentUser?.role || 'USER';
-  const isAdmin = userRole === 'ADMIN';
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const workspaceNav = [
-    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
+  const primaryNav = [
+    { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
+    { id: 'repository', label: 'Repository', icon: GitBranch },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
-    { id: 'workspace', label: 'Workspace', icon: GitFork },
     { id: 'agents', label: 'Agents', icon: Bot },
-    { id: 'approvals', label: 'Approvals', icon: FileCheck2 },
+    { id: 'artifacts', label: 'Artifacts', icon: Box },
+    { id: 'activity', label: 'Activity', icon: Activity },
   ];
 
-  const intelligenceNav = [
-    { id: 'intelligence', label: 'Intelligence', icon: Brain },
-    { id: 'evaluations', label: 'Evaluations', icon: Award },
-  ];
-
-  const operationsNav = [
-    { id: 'observability', label: 'Observability', icon: Activity },
-    { id: 'settings', label: 'System Health', icon: Settings },
-  ];
-
-  const securityNav = [
-    { id: 'security', label: 'Security Center', icon: ShieldAlert, adminOnly: true },
+  const secondaryNav = [
+    { id: 'operations', label: 'Operations', icon: Layers },
+    { id: 'settings', label: 'Settings', icon: Settings },
   ];
 
   return (
-    <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col h-screen select-none">
+    <aside
+      className={`${
+        isCollapsed ? 'w-18' : 'w-56'
+      } bg-white border-r border-slate-200/90 flex flex-col h-screen select-none transition-all duration-200 relative z-20 shrink-0`}
+    >
       {/* Brand Header */}
-      <div className="p-5 border-b border-slate-800 flex items-center justify-between">
-        <div>
-          <div className="flex items-center space-x-2">
-            <span className="h-2.5 w-2.5 bg-emerald-500 rounded-full animate-pulse" />
-            <h1 className="font-bold text-sm tracking-wider text-slate-100 uppercase font-mono">
-              AgentOS
-            </h1>
-          </div>
-          <p className="text-[11px] text-slate-500 mt-0.5 font-mono">AI Engineering Platform</p>
+      <div className="h-16 px-4 flex items-center space-x-2.5">
+        <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-xs">
+          <Sparkles className="w-4 h-4 fill-white" />
         </div>
+        {!isCollapsed && (
+          <span className="font-bold text-base text-slate-900 font-sans tracking-tight">
+            AgentOS
+          </span>
+        )}
       </div>
 
-      {/* Categorized Navigation */}
-      <nav className="flex-1 px-3 py-3 space-y-4 overflow-y-auto font-sans text-xs">
-        {/* Workspace Group */}
-        <div className="space-y-1">
-          <span className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-            Workspace
-          </span>
-          {workspaceNav.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center px-3 py-2 rounded-md font-medium transition-colors ${
-                  isActive
-                    ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
-                    : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-                }`}
-              >
-                <Icon className="w-4 h-4 mr-2.5" />
-                {item.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Intelligence Group */}
-        <div className="space-y-1">
-          <span className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-            Intelligence
-          </span>
-          {intelligenceNav.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center px-3 py-2 rounded-md font-medium transition-colors ${
-                  isActive
-                    ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
-                    : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-                }`}
-              >
-                <Icon className="w-4 h-4 mr-2.5" />
-                {item.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Operations Group */}
-        <div className="space-y-1">
-          <span className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-            Operations
-          </span>
-          {operationsNav.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center px-3 py-2 rounded-md font-medium transition-colors ${
-                  isActive
-                    ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
-                    : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-                }`}
-              >
-                <Icon className="w-4 h-4 mr-2.5" />
-                {item.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Security Group (Admin only) */}
-        {isAdmin && (
-          <div className="space-y-1">
-            <span className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Security
-            </span>
-            {securityNav.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center px-3 py-2 rounded-md font-medium transition-colors ${
-                    isActive
-                      ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
-                      : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-                  }`}
-                >
-                  <Icon className="w-4 h-4 mr-2.5" />
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
+      {/* Primary Navigation */}
+      <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto">
+        {primaryNav.map((item) => {
+          const Icon = item.icon;
+          const isActive = activeTab === item.id || (activeTab === 'execution' && item.id === 'tasks');
+          return (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              title={isCollapsed ? item.label : undefined}
+              className={`w-full flex items-center ${
+                isCollapsed ? 'justify-center px-0 py-2' : 'px-3 py-2'
+              } rounded-xl text-[13px] font-medium transition-all ${
+                isActive
+                  ? 'bg-indigo-50/90 text-indigo-600 font-semibold'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              <Icon className={`w-4 h-4 ${isActive ? 'text-indigo-600' : 'text-slate-500'} ${!isCollapsed ? 'mr-3' : ''}`} />
+              {!isCollapsed && <span>{item.label}</span>}
+            </button>
+          );
+        })}
       </nav>
 
-      {/* Authenticated User Area */}
-      <div className="p-3.5 border-t border-slate-800 bg-slate-950/60">
-        <div className="flex items-center space-x-2.5 mb-2.5">
-          <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300">
-            <User className="w-3.5 h-3.5" />
-          </div>
-          <div className="overflow-hidden">
-            <p className="text-xs font-semibold text-slate-200 truncate uppercase">
-              {currentUser?.username || 'Authenticated User'}
-            </p>
-            <p className="text-[10px] text-slate-500 truncate font-mono">
-              {currentUser?.email || 'user@agentos.local'}
-            </p>
-          </div>
-        </div>
+      {/* Secondary Navigation & Collapse */}
+      <div className="p-3 space-y-1 border-t border-slate-100">
+        {secondaryNav.map((item) => {
+          const Icon = item.icon;
+          const isActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              title={isCollapsed ? item.label : undefined}
+              className={`w-full flex items-center ${
+                isCollapsed ? 'justify-center px-0 py-2' : 'px-3 py-2'
+              } rounded-xl text-[13px] font-medium transition-all ${
+                isActive
+                  ? 'bg-indigo-50/90 text-indigo-600 font-semibold'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              <Icon className={`w-4 h-4 ${isActive ? 'text-indigo-600' : 'text-slate-500'} ${!isCollapsed ? 'mr-3' : ''}`} />
+              {!isCollapsed && <span>{item.label}</span>}
+            </button>
+          );
+        })}
 
-        <div className="flex items-center justify-between pt-2 border-t border-slate-800/60">
-          <div className="flex items-center space-x-1.5 font-mono text-[10px]">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-emerald-400 font-bold uppercase">{userRole}</span>
-          </div>
-
-          <button
-            onClick={onSignOut}
-            className="flex items-center space-x-1 text-[11px] font-mono text-slate-400 hover:text-rose-400 transition-colors"
-            title="Sign out"
-          >
-            <LogOut className="w-3 h-3" />
-            <span>Sign out</span>
-          </button>
-        </div>
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className={`w-full flex items-center ${
+            isCollapsed ? 'justify-center px-0 py-2' : 'px-3 py-2'
+          } rounded-xl text-[13px] font-medium text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-all`}
+        >
+          {isCollapsed ? (
+            <ChevronRight className="w-4 h-4" />
+          ) : (
+            <>
+              <ChevronLeft className="w-4 h-4 mr-3" />
+              <span>Collapse</span>
+            </>
+          )}
+        </button>
       </div>
     </aside>
   );

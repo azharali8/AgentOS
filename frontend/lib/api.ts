@@ -127,6 +127,10 @@ export class AgentOSClient {
     });
   }
 
+  async getTaskArtifacts(taskId: string): Promise<any[]> {
+    return this.request<any[]>(`/api/v1/tasks/${taskId}/artifacts`);
+  }
+
   // Approvals (Human-in-the-Loop)
   async listApprovals(limit: number = 50, offset: number = 0): Promise<ApprovalRequestItem[]> {
     return this.request<ApprovalRequestItem[]>(`/api/v1/approvals?limit=${limit}&offset=${offset}`);
@@ -152,6 +156,34 @@ export class AgentOSClient {
     return this.request<WorkspaceFileResponse>(`/api/v1/workspace/file?path=${encodeURIComponent(path)}`);
   }
 
+  async getWorkspaceInfo(): Promise<any> {
+    return this.request<any>('/api/v1/workspace/info');
+  }
+
+  async setWorkspaceRoot(path: string, name: string = ''): Promise<any> {
+    return this.request<any>('/api/v1/workspace/set-root', {
+      method: 'POST',
+      body: JSON.stringify({ path, name }),
+    });
+  }
+
+  async createNewProject(
+    name: string,
+    location: string,
+    instruction: string,
+    autoStartTask: boolean = true
+  ): Promise<any> {
+    return this.request<any>('/api/v1/workspace/create-project', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        location,
+        instruction,
+        auto_start_task: autoStartTask,
+      }),
+    });
+  }
+
   // Agents
   async listAgents(): Promise<AgentDefinition[]> {
     return this.request<AgentDefinition[]>('/api/v1/agents');
@@ -174,6 +206,15 @@ export class AgentOSClient {
       method: 'POST',
       body: JSON.stringify({ instruction, target_files: targetFiles, context }),
     });
+  }
+
+  // System Queue & Workers
+  async getSystemQueue(): Promise<any> {
+    return this.request<any>('/api/v1/system/queue');
+  }
+
+  async getSystemWorkers(): Promise<any> {
+    return this.request<any>('/api/v1/system/workers');
   }
 
   // Evaluations

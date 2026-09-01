@@ -103,7 +103,7 @@ class DebuggerAgent:
             logger.warning("Debugger diagnosis LLM fallback: %s", exc)
             return DebugDiagnosis(
                 root_cause=investigation.suspected_root_cause or "Assertion mismatch in implementation",
-                affected_files=investigation.affected_files or ["calculator.py"],
+                affected_files=investigation.affected_files or [],
                 affected_symbols=[s.get("name", "") for s in investigation.relevant_symbols if isinstance(s, dict)],
                 explanation=investigation.evidence or "Test assertions failed against current code.",
                 recommended_fix=investigation.recommended_change or "Update function logic to satisfy tests.",

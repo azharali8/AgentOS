@@ -136,3 +136,29 @@ export interface BenchmarkSuiteResult {
   success_rate_pct: number;
   results: BenchmarkResultItem[];
 }
+
+export interface WorkspaceConfigResponse {
+  status: string;
+  root: string;
+  path: string;
+  files_count: number;
+  dirs_count: number;
+  persisted: boolean;
+}
+
+export interface WorkspaceInfoResponse {
+  root: string;
+  is_empty: boolean;
+  files_count: number;
+  dirs_count: number;
+  git_branch: string | null;
+}
+
+export interface CreateProjectResponse {
+  status: string;
+  project_name: string;
+  path: string;
+  git_initialized: boolean;
+  task_id?: string | null;
+}
+

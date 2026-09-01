@@ -128,7 +128,11 @@ class RepositoryScanner:
     """Bounded, security-safe repository traversal."""
 
     def __init__(self, workspace_root: Optional[Path] = None) -> None:
-        self._root = (workspace_root or Path(settings.WORKSPACE_ROOT)).resolve()
+        self._explicit_root = workspace_root
+
+    @property
+    def _root(self) -> Path:
+        return (self._explicit_root or Path(settings.WORKSPACE_ROOT)).resolve()
 
     def _is_inside_workspace(self, resolved: Path) -> bool:
         try:

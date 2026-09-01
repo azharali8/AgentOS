@@ -259,7 +259,7 @@ class SupervisorAgent:
                 
                 diagnosis = DiagnosisReport(
                     symptoms=["Test failure detected" if not passed else "Diagnostics probe run"],
-                    suspected_files=subtask.target_files or ["calculator.py"],
+                    suspected_files=subtask.target_files or [],
                     root_cause="Operator mismatch or syntax defect" if not passed else "No critical defects detected",
                     suggested_fix="Apply verified patch via CodingAgent",
                     confidence_score=0.95,

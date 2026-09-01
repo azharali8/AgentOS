@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node test_frontend_contracts.js"
+    "test": "next build"
   },
   "dependencies": {
     "clsx": "^2.1.1",

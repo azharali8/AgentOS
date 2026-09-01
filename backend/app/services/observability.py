@@ -73,8 +73,26 @@ class ObservabilityService:
 
         success_rate = (completed_tasks / total_tasks * 100.0) if total_tasks > 0 else 100.0
 
+        # Distributed Coordination & Redis Health
+        from backend.app.services.redis_client import is_redis_available
+        from backend.app.services.task_queue import TaskQueue
+        from backend.app.services.worker_manager import WorkerManager
+        from backend.app.services.task_lease import TaskLeaseService
+
+        redis_status = "HEALTHY" if is_redis_available() else "UNAVAILABLE"
+        queue_stats = TaskQueue.get_stats()
+        workers_list = WorkerManager.list_workers()
+        healthy_workers = sum(1 for w in workers_list if w.get("status") in ("READY", "BUSY"))
+
         return {
             "system": sys_metrics.model_dump(),
+            "distributed": {
+                "redis_status": redis_status,
+                "queue_backend": getattr(settings, "QUEUE_BACKEND", "sqlite"),
+                "total_workers": len(workers_list),
+                "healthy_workers": healthy_workers,
+                "queue_stats": queue_stats,
+            },
             "tasks": {
                 "total": total_tasks,
                 "completed": completed_tasks,
@@ -93,3 +111,4 @@ class ObservabilityService:
                 "usage_summary": llm_usage,
             },
         }
+

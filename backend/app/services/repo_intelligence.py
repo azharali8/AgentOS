@@ -103,6 +103,30 @@ class RepoIntelligence:
         scored_files.sort(key=lambda x: x[0], reverse=True)
         return [path for _, path in scored_files[:max_files]]
 
+    def get_first_workspace_files(self, max_files: int = 3) -> List[str]:
+        """Return the first available source files in the workspace.
+
+        Used as a safe fallback when no relevant files are found by keyword
+        search. Returns actual workspace files rather than assuming a
+        hardcoded filename like 'calculator.py'.
+        """
+        try:
+            scan_res = self.scanner.scan()
+            all_files = [f.relative_path for f in scan_res.files]
+            if not all_files:
+                return []
+            # Prefer Python/JS/TS source files, then any file
+            priority = [
+                f for f in all_files
+                if f.endswith((".py", ".js", ".ts", ".tsx", ".jsx"))
+                and "test" not in f.lower()
+            ]
+            return (priority or all_files)[:max_files]
+        except Exception:
+            return []
+
+
+
     def extract_file_symbols(self, relative_path: str) -> Dict[str, Any]:
         """Extract AST symbols and signature map for a given file."""
         if not relative_path.endswith(".py"):

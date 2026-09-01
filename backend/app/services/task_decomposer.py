@@ -241,6 +241,13 @@ class TaskDecomposer:
 
     def _heuristic_fallback(self, instruction: str, task_id: str) -> List[SubTask]:
         """Deterministic heuristic decomposition fallback."""
+        # Dynamically discover relevant files rather than assuming calculator.py
+        from backend.app.services.repo_intelligence import RepoIntelligence
+        intelligence = RepoIntelligence()
+        target_files = intelligence.find_relevant_files(instruction, max_files=3)
+        if not target_files:
+            target_files = intelligence.get_first_workspace_files(max_files=2)
+
         inst = instruction.lower()
         if "test" in inst or "bug" in inst or "fix" in inst:
             return [
@@ -250,7 +257,7 @@ class TaskDecomposer:
                     description="Research repository structure and locate buggy code/tests",
                     assigned_agent=AgentType.RESEARCH,
                     dependencies=[],
-                    target_files=["calculator.py"],
+                    target_files=target_files,
                 ),
                 SubTask(
                     task_id=task_id,
@@ -258,7 +265,7 @@ class TaskDecomposer:
                     description="Diagnose test failure and synthesize root cause",
                     assigned_agent=AgentType.DEBUGGER,
                     dependencies=["subtask_1"],
-                    target_files=["calculator.py"],
+                    target_files=target_files,
                 ),
                 SubTask(
                     task_id=task_id,
@@ -266,7 +273,7 @@ class TaskDecomposer:
                     description="Formulate and apply validated patch",
                     assigned_agent=AgentType.CODING,
                     dependencies=["subtask_2"],
-                    target_files=["calculator.py"],
+                    target_files=target_files,
                 ),
                 SubTask(
                     task_id=task_id,
@@ -274,7 +281,7 @@ class TaskDecomposer:
                     description="Review execution outcome and verify no regressions",
                     assigned_agent=AgentType.REVIEWER,
                     dependencies=["subtask_3"],
-                    target_files=["calculator.py"],
+                    target_files=target_files,
                 ),
                 SubTask(
                     task_id=task_id,
@@ -319,3 +326,4 @@ class TaskDecomposer:
                     dependencies=["subtask_1"],
                 ),
             ]
+
