@@ -225,19 +225,24 @@ def test_create_project_skips_git_gracefully(tmp_path):
     parent = _make_parent(tmp_path)
     from backend.app.config.settings import PROJECT_ROOT as real_root
 
-    with patch("backend.app.services.project_creator.PROJECT_ROOT", str(real_root)):
-        with patch("backend.app.services.project_creator.settings") as mock_settings, \
-             patch("os.environ"), \
-             patch("subprocess.run", side_effect=FileNotFoundError("git not found")):
-            mock_settings.WORKSPACE_ROOT = ""
-            result = ProjectCreatorService.create_project(
-                name="NoGitApp",
-                location=str(parent),
-                initialize_git=True,
-            )
+    from backend.app.config.settings import settings as real_settings
+    old_root = real_settings.WORKSPACE_ROOT
 
-    assert result["git_initialized"] is False
-    assert (parent / "NoGitApp").exists()
+    try:
+        with patch("backend.app.services.project_creator.PROJECT_ROOT", str(real_root)):
+            with patch("os.environ"), \
+                 patch("subprocess.run", side_effect=FileNotFoundError("git not found")):
+                result = ProjectCreatorService.create_project(
+                    name="NoGitApp",
+                    location=str(parent),
+                    initialize_git=True,
+                )
+
+        assert result["git_initialized"] is False
+        assert (parent / "NoGitApp").exists()
+    finally:
+        real_settings.WORKSPACE_ROOT = old_root
+
 
 
 def test_duplicate_creation_raises_conflict(tmp_path):

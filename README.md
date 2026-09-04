@@ -24,6 +24,7 @@ AgentOS is a secure, autonomous AI software-engineering platform that orchestrat
 - **Authentication & RBAC**: Role-Based Access Control (`ADMIN`, `DEVELOPER`, `USER`, `VIEWER`), session TTL (3600s), sliding window refresh, and logout token revocation.
 - **Rate Limiting & Brute-Force Protection**: Multi-domain sliding-window rate limiting (`auth`, `task_create`, `api`, `ws`) and 5-attempt / 15-minute account lockout.
 - **Workspace Sandbox & Boundary Defense**: Strict defenses against path traversal (`..`), URL encoding, null bytes, UNC paths, Windows drive escapes, and symlink escapes.
+- **Voice-Driven Autonomous Engineering**: Hands-free voice interface powered by AssemblyAI Speech-to-Text with bidirectional audio synthesis feedback and live workspace execution.
 - **WebSocket Event Streaming & Replay**: Real-time append-only event streaming with handshake authentication and reconnection event replay from `last_event_id`.
 - **Observability & Health Probes**: `/health` liveness and `/ready` readiness probes checking database integrity, workspace availability, and model router health.
 - **SQLite Persistence & Integrity**: SQLite storage with `@with_db_retry` exponential backoff for busy/lock handling and `PRAGMA integrity_check` validation.
@@ -416,6 +417,57 @@ Response:
   "git_initialized": true,
   "task_id": "task-abc12345-..."
 }
+```
+
+---
+
+## Voice Agent & Audio Interface
+
+AgentOS features a voice-driven autonomous software engineering interface powered by **AssemblyAI**:
+
+```text
+Microphone Audio Capture (Browser MediaRecorder)
+        |
+        v
+POST /api/v1/voice/transcribe or /api/v1/voice/execute
+        |
+AssemblyAI Speech-to-Text Provider (REST API)
+  → Secure Upload Chunking
+  → Asynchronous Audio Transcription
+  → Polling & Status Verification
+        |
+        v
+VoiceService (Intent Routing & Task Creation)
+        |
+        +---> Project Creation Intent? → ProjectCreatorService (scaffold & switch workspace)
+        |
+        +---> Standard Engineering Intent? → TaskService & Supervisor Agent
+        |
+        v
+Multi-Agent Engineering Pipeline (Coding → Testing → Debugging → Review)
+        |
+        v
+Real File Mutation & Test Verification
+        |
+        v
+Audio Synthesis Feedback (Browser SpeechSynthesis / TTS Provider)
+```
+
+### Voice API Endpoints
+
+- `GET /api/v1/voice/status` — Returns active provider (`assemblyai` / `mock`), configured TTS provider, and credit/quota readiness.
+- `POST /api/v1/voice/transcribe` — Uploads raw audio (`.webm`, `.wav`, `.mp3`, `.ogg`, `.m4a`) and returns high-accuracy transcript with confidence score.
+- `POST /api/v1/voice/execute` — End-to-end voice invocation: transcribes audio and immediately launches an autonomous engineering task on the active workspace.
+- `POST /api/v1/voice/synthesize` — Synthesizes task completion summaries or agent feedback into audio responses.
+
+### Voice Configuration (`.env`)
+
+```env
+ASSEMBLYAI_API_KEY=your_assemblyai_api_key_here
+VOICE_PROVIDER=assemblyai
+VOICE_TTS_PROVIDER=browser
+VOICE_MAX_AUDIO_SIZE_BYTES=26214400
+VOICE_TIMEOUT_SECONDS=120
 ```
 
 ---

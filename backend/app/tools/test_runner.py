@@ -214,10 +214,19 @@ class TestRunnerTool(BaseTool):
             },
             risk_level=RiskLevel.MEDIUM,
         ))
-        self._root = Path(settings.WORKSPACE_ROOT).resolve()
+        self._custom_root: Optional[Path] = None
+
+    @property
+    def _root(self) -> Path:
+        return (self._custom_root or Path(settings.WORKSPACE_ROOT)).resolve()
+
+    @_root.setter
+    def _root(self, val: Path) -> None:
+        self._custom_root = val
 
     # Allowed additional pytest flags (LLM cannot inject arbitrary flags)
     _PYTEST_ALLOWED_FLAGS: frozenset[str] = frozenset({
+
         "-v", "--verbose",
         "-q", "--quiet",
         "-x", "--exitfirst",

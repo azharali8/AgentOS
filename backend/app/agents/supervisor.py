@@ -255,7 +255,9 @@ class SupervisorAgent:
                 )
             elif agent_type == AgentType.DEBUGGER:
                 test_res = self.debugger_agent.run_tests()
-                passed = test_res.get("data", {}).get("passed", False) if isinstance(test_res, dict) else False
+                data_dict = test_res.get("data") if isinstance(test_res, dict) else None
+                passed = data_dict.get("passed", False) if isinstance(data_dict, dict) else False
+
                 
                 diagnosis = DiagnosisReport(
                     symptoms=["Test failure detected" if not passed else "Diagnostics probe run"],

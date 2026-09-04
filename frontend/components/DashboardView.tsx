@@ -11,8 +11,11 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { Task, AgentDefinition, UserProfile } from '../types';
+import { AgentOSClient } from '../lib/api';
+import { VoiceControl } from './voice/VoiceControl';
 
 interface DashboardViewProps {
+  client: AgentOSClient;
   tasks: Task[];
   agents: AgentDefinition[];
   currentUser: UserProfile | null;
@@ -24,6 +27,7 @@ interface DashboardViewProps {
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
+  client,
   tasks,
   currentUser,
   onSelectTask,
@@ -33,6 +37,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const [instruction, setInstruction] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
 
   // Filter out benchmark/harness tasks for user workspace
   const userTasks = tasks.filter(
@@ -92,7 +97,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           className="w-full text-sm text-slate-900 placeholder:text-slate-400 bg-transparent border-none resize-none focus:outline-none focus:ring-0 leading-relaxed font-sans"
         />
 
-        <div className="flex flex-col sm:flex-row items-center justify-end pt-2 gap-3 border-t border-slate-100">
+        <div className="flex flex-col sm:flex-row items-center justify-between pt-2 gap-3 border-t border-slate-100">
+          {/* Voice Input Integration */}
+          <VoiceControl
+            client={client}
+            onTranscriptReady={(text) => setInstruction(text)}
+            onTaskCreated={(taskId) => onSelectTask(taskId)}
+          />
+
           <div className="flex items-center space-x-2.5">
             <button
               type="button"

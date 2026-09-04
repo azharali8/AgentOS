@@ -84,16 +84,22 @@ class ProjectCreatorService:
 
         target_dir = (parent_dir / name_clean).resolve()
 
-        # Prevent pointing into the AgentOS installation directory
+        # Prevent pointing into the AgentOS source code and core system directories
         agentos_root = Path(PROJECT_ROOT).resolve()
-        _inside_agentos = False
+        _inside_agentos_source = False
         try:
-            target_dir.relative_to(agentos_root)
-            _inside_agentos = True
+            rel = target_dir.relative_to(agentos_root)
+            # If target is directly inside backend, frontend, sdk, .git, etc. or is the root itself
+            core_dirs = {"backend", "frontend", "sdk", ".git", ".github", "app"}
+            if len(rel.parts) > 0 and rel.parts[0].lower() in core_dirs:
+                _inside_agentos_source = True
+            elif len(rel.parts) == 1 and rel.parts[0].lower() not in {"tmp", "workspace"}:
+                # Avoid creating projects directly in AgentOS root
+                _inside_agentos_source = True
         except ValueError:
-            pass  # Target is correctly outside agentos_root
+            pass  # Target is completely outside agentos_root
 
-        if _inside_agentos:
+        if _inside_agentos_source:
             raise ProjectCreationError(
                 "Cannot create a project inside the AgentOS installation directory. "
                 "Please choose an external directory."
@@ -176,24 +182,27 @@ class ProjectCreatorService:
         settings.WORKSPACE_ROOT = str(target_dir)
         os.environ["WORKSPACE_ROOT"] = str(target_dir)
 
-        agentos_root = Path(PROJECT_ROOT).resolve()
-        env_path = agentos_root / ".env"
-        try:
-            if env_path.exists():
-                lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
-                updated = False
-                for i, line in enumerate(lines):
-                    if line.startswith("WORKSPACE_ROOT="):
-                        lines[i] = f"WORKSPACE_ROOT={target_dir}\n"
-                        updated = True
-                        break
-                if not updated:
-                    lines.append(f"WORKSPACE_ROOT={target_dir}\n")
-                env_path.write_text("".join(lines), encoding="utf-8")
-            else:
-                env_path.write_text(f"WORKSPACE_ROOT={target_dir}\n", encoding="utf-8")
-        except Exception as exc:
-            logger.warning("Could not persist WORKSPACE_ROOT to .env: %s", exc)
+        # Persist to .env only if not running in pytest/test mode to avoid breaking test suites
+        if "PYTEST_CURRENT_TEST" not in os.environ and getattr(settings, "APP_ENV", "") != "test":
+            agentos_root = Path(PROJECT_ROOT).resolve()
+            env_path = agentos_root / ".env"
+            try:
+                if env_path.exists():
+                    lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+                    updated = False
+                    for i, line in enumerate(lines):
+                        if line.startswith("WORKSPACE_ROOT="):
+                            lines[i] = f"WORKSPACE_ROOT={target_dir}\n"
+                            updated = True
+                            break
+                    if not updated:
+                        lines.append(f"WORKSPACE_ROOT={target_dir}\n")
+                    env_path.write_text("".join(lines), encoding="utf-8")
+                else:
+                    env_path.write_text(f"WORKSPACE_ROOT={target_dir}\n", encoding="utf-8")
+            except Exception as exc:
+                logger.warning("Could not persist WORKSPACE_ROOT to .env: %s", exc)
+
 
         return {
             "status": "ok",

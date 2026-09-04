@@ -1,0 +1,65 @@
+"""Pytest bootstrap for AgentOS.
+
+The hosted Windows environment used for this workspace does not always grant
+pytest access to the default user temp directory.  Redirect pytest's temp root
+into the repository so `tmp_path` and related fixtures remain available for the
+full suite.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+
+def pytest_configure() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    temp_root = repo_root / "tmp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    temp_path = str(temp_root)
+
+    os.environ["TMP"] = temp_path
+    os.environ["TEMP"] = temp_path
+    os.environ["TMPDIR"] = temp_path
+    tempfile.tempdir = temp_path
+
+    # Ensure repository root and sdk package are resolvable
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    sdk_path = str(repo_root / "sdk")
+    if sdk_path not in sys.path:
+        sys.path.insert(0, sdk_path)
+
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def reset_workspace_root_setting():
+    from backend.app.config.settings import PROJECT_ROOT, settings
+    default_ws = str(PROJECT_ROOT / "workspace")
+    old_setting = settings.WORKSPACE_ROOT
+    old_env = os.environ.get("WORKSPACE_ROOT")
+    yield
+    # Unconditionally restore to default workspace root to prevent test leakage
+    settings.WORKSPACE_ROOT = default_ws
+    if old_env is not None and "pytest" not in old_env.lower():
+        os.environ["WORKSPACE_ROOT"] = old_env
+    else:
+        os.environ["WORKSPACE_ROOT"] = default_ws
+
+
+@pytest.fixture(autouse=True)
+def enforce_mock_voice_provider():
+    """Guarantee AssemblyAI credits are protected during automated test execution."""
+    from backend.app.voice.service import VoiceService
+    from backend.app.voice.providers.mock import MockSpeechToTextProvider, BrowserTextToSpeechProvider
+    VoiceService.set_stt_provider(MockSpeechToTextProvider())
+    VoiceService.set_tts_provider(BrowserTextToSpeechProvider())
+    yield
+    VoiceService.set_stt_provider(None)
+    VoiceService.set_tts_provider(None)
+
+
+

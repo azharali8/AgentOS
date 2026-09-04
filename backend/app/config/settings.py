@@ -97,12 +97,18 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE_SECONDS: int = 300
     DB_POOL_TIMEOUT_SECONDS: int = 30
 
+    # Voice Agent & Speech Configuration (AssemblyAI)
+    ASSEMBLYAI_API_KEY: str = ""
+    VOICE_PROVIDER: str = "assemblyai"     # "assemblyai" | "mock"
+    VOICE_TTS_PROVIDER: str = "browser"    # "browser" | "mock"
+    VOICE_MAX_AUDIO_SIZE_BYTES: int = 15 * 1024 * 1024  # 15 MB
+    VOICE_TIMEOUT_SECONDS: int = 60
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
     class Config:
-        env_file = ".env"
+        env_file = str(PROJECT_ROOT / ".env")
 
 settings = Settings()

@@ -7,5 +7,10 @@ requires-python = ">=3.11.14"
 dependencies = []
 
 [tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["."]
 asyncio_mode = "strict"
 tmp_path_retention_policy = "failed"
+addopts = "--basetemp=tmp/pytest-shared-run"
+
+

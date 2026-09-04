@@ -162,3 +162,32 @@ export interface CreateProjectResponse {
   task_id?: string | null;
 }
 
+export interface VoiceStatusResponse {
+  stt_provider: string;
+  has_api_key: boolean;
+  tts_provider: string;
+  max_audio_size_mb: number;
+  allowed_mime_types: string[];
+}
+
+export interface VoiceExecuteResponse {
+  status: string;
+  transcript: string;
+  task_id?: string | null;
+  project_created: boolean;
+  project_path?: string | null;
+  tts_summary: string;
+  provider: string;
+  confidence?: number | null;
+}
+
+export interface VoiceTranscriptionResponse {
+  transcript: string;
+  confidence?: number | null;
+  duration_seconds?: number | null;
+  words_count: number;
+  provider: string;
+  language_code?: string;
+}
+
+

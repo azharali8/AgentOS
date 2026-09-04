@@ -958,29 +958,28 @@ def set_workspace_root(
     settings.WORKSPACE_ROOT = str(target)
     os.environ["WORKSPACE_ROOT"] = str(target)
 
-    # Persist to .env file for across-restart durability
-    # Only updates the WORKSPACE_ROOT line; all other settings are preserved.
-    env_path = agentos_root / ".env"
-    try:
-        if env_path.exists():
-            lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
-            updated = False
-            for i, line in enumerate(lines):
-                if line.startswith("WORKSPACE_ROOT="):
-                    lines[i] = f"WORKSPACE_ROOT={target}\n"
-                    updated = True
-                    break
-            if not updated:
-                lines.append(f"WORKSPACE_ROOT={target}\n")
-            env_path.write_text("".join(lines), encoding="utf-8")
-        else:
-            env_path.write_text(f"WORKSPACE_ROOT={target}\n", encoding="utf-8")
-    except Exception as exc:
-        # Non-fatal: runtime is already updated, but warn about persistence
-        import logging
-        logging.getLogger("agentos.workspace").warning(
-            "Could not persist WORKSPACE_ROOT to .env: %s", exc
-        )
+    # Persist to .env file for across-restart durability (skipped during pytest)
+    if "PYTEST_CURRENT_TEST" not in os.environ and getattr(settings, "APP_ENV", "") != "test":
+        env_path = agentos_root / ".env"
+        try:
+            if env_path.exists():
+                lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+                updated = False
+                for i, line in enumerate(lines):
+                    if line.startswith("WORKSPACE_ROOT="):
+                        lines[i] = f"WORKSPACE_ROOT={target}\n"
+                        updated = True
+                        break
+                if not updated:
+                    lines.append(f"WORKSPACE_ROOT={target}\n")
+                env_path.write_text("".join(lines), encoding="utf-8")
+            else:
+                env_path.write_text(f"WORKSPACE_ROOT={target}\n", encoding="utf-8")
+        except Exception as exc:
+            import logging
+            logging.getLogger("agentos.workspace").warning(
+                "Could not persist WORKSPACE_ROOT to .env: %s", exc
+            )
 
     display_name = req.name.strip() or target.name
 
@@ -1214,3 +1213,8 @@ v1_router.include_router(evaluations_v1)
 v1_router.include_router(system_v1)
 v1_router.include_router(events_v1)
 v1_router.include_router(artifacts_v1)
+
+from backend.app.voice.router import router as voice_v1
+v1_router.include_router(voice_v1)
+
+

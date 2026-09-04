@@ -13,6 +13,7 @@ import { ApprovalCenterView } from '../components/approvals/ApprovalCenterView';
 import { ObservabilityView } from '../components/observability/ObservabilityView';
 import { SecurityCenterView } from '../components/security/SecurityCenterView';
 import { SystemHealthView } from '../components/system/SystemHealthView';
+import { VoiceControl } from '../components/voice/VoiceControl';
 import { AgentOSClient } from '../lib/api';
 import { Task, AgentDefinition, UserProfile, UserRole, ModelsStatusResponse } from '../types';
 import { useTaskEventStream } from '../hooks/useTaskEventStream';
@@ -200,6 +201,17 @@ export default function Home() {
               {activeTab === 'execution' ? 'Tasks' : activeTab}
             </span>
 
+            {/* Compact Header Voice Input */}
+            <VoiceControl
+              client={client}
+              compact={true}
+              onTaskCreated={(taskId) => {
+                setSelectedTaskId(taskId);
+                setActiveTab('execution');
+                loadData();
+              }}
+            />
+
             {/* Bell Notifications */}
             <button
               onClick={() => setActiveTab('artifacts')}
@@ -224,6 +236,7 @@ export default function Home() {
         <main className="flex-1 overflow-y-auto p-8 bg-grid-pattern">
           {activeTab === 'workspace' && (
             <DashboardView
+              client={client}
               tasks={tasks}
               agents={agents}
               currentUser={currentUser}
@@ -238,7 +251,16 @@ export default function Home() {
             />
           )}
 
-          {activeTab === 'repository' && <WorkspaceView client={client} />}
+          {activeTab === 'repository' && (
+            <WorkspaceView
+              client={client}
+              onTaskCreated={(taskId) => {
+                setSelectedTaskId(taskId);
+                setActiveTab('execution');
+                loadData();
+              }}
+            />
+          )}
 
           {activeTab === 'tasks' && (
             <TaskCenterView

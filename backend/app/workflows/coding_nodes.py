@@ -142,8 +142,14 @@ def diagnose_node(state: CodingAgentState) -> Dict[str, Any]:
 def generate_patch_node(state: CodingAgentState) -> Dict[str, Any]:
     task_id = state.get("task_id", "")
     diagnosis = state.get("diagnosis", {})
-    affected_files = diagnosis.get("affected_files", ["calculator.py"])
-    target_file = affected_files[0] if affected_files else "calculator.py"
+    affected_files = diagnosis.get("affected_files", [])
+    if affected_files:
+        target_file = affected_files[0]
+    else:
+        # Dynamically discover workspace python files if no affected files diagnosed
+        root = WorkspaceService.get_workspace_root()
+        py_files = list(root.glob("*.py"))
+        target_file = py_files[0].name if py_files else "main.py"
 
     EventService.record_event(task_id, "PATCH_GENERATION_STARTED")
 

@@ -221,4 +221,80 @@ export class AgentOSClient {
   async getEvaluations(): Promise<any> {
     return this.request<any>('/api/v1/evaluations/benchmarks');
   }
+
+  // Voice Agent (AssemblyAI)
+  async getVoiceStatus(): Promise<any> {
+    return this.request<any>('/api/v1/voice/status');
+  }
+
+  async transcribeAudio(audioBlob: Blob, language: string = 'en'): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'recording.webm');
+    formData.append('language', language);
+
+    const headers: Record<string, string> = {};
+    if (this.apiKey) {
+      headers['X-API-Key'] = this.apiKey;
+    }
+
+    const res = await fetch(`${API_BASE}/api/v1/voice/transcribe`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      let message = errorText;
+      try {
+        const json = JSON.parse(errorText);
+        if (json.detail) message = json.detail;
+      } catch {}
+      throw new Error(`Voice Transcription Error (${res.status}): ${message}`);
+    }
+
+    return res.json();
+  }
+
+  async executeVoiceCommand(
+    audioBlob: Blob,
+    autoStart: boolean = true,
+    sync: boolean = false
+  ): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'command.webm');
+    formData.append('auto_start', String(autoStart));
+    formData.append('sync', String(sync));
+
+    const headers: Record<string, string> = {};
+    if (this.apiKey) {
+      headers['X-API-Key'] = this.apiKey;
+    }
+
+    const res = await fetch(`${API_BASE}/api/v1/voice/execute`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      let message = errorText;
+      try {
+        const json = JSON.parse(errorText);
+        if (json.detail) message = json.detail;
+      } catch {}
+      throw new Error(`Voice Execution Error (${res.status}): ${message}`);
+    }
+
+    return res.json();
+  }
+
+  async synthesizeSpeech(text: string, voice?: string): Promise<any> {
+    return this.request<any>('/api/v1/voice/synthesize', {
+      method: 'POST',
+      body: JSON.stringify({ text, voice }),
+    });
+  }
 }
+
