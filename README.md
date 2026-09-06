@@ -188,7 +188,7 @@ alembic upgrade head
 ```bash
 cd frontend
 npm.cmd install
-cd ..
+npm run dev
 ```
 
 ---
