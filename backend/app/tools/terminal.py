@@ -112,7 +112,8 @@ class TerminalTool(BaseTool):
                 stderr = stderr[:settings.MAX_OUTPUT_SIZE] + "\n...[ERROR TRUNCATED]..."
 
             if process.returncode == 0:
-                return ToolResult(tool_name=self.metadata.name, success=True, data=stdout)
+                output = stdout if stdout else stderr
+                return ToolResult(tool_name=self.metadata.name, success=True, data=output)
             else:
                 return ToolResult(tool_name=self.metadata.name, success=False, error=stderr)
         except Exception as e:

@@ -169,7 +169,13 @@ def sensitive_file_reason(path: str | Path) -> str:
     for pattern in _SENSITIVE_BASENAME_PATTERNS:
         if fnmatch.fnmatch(name, pattern):
             return f"File '{name}' matches sensitive pattern '{pattern}'"
-    for pattern in _SENSITIVE_PATH_PATTERNS:
-        if fnmatch.fnmatch(p.as_posix(), pattern):
-            return f"Path matches sensitive pattern '{pattern}'"
+    rel = p.as_posix()
+    for prefix in _SENSITIVE_PATH_PREFIXES:
+        if rel.startswith(prefix) or f"/{prefix}" in rel:
+            return f"Path matches sensitive directory prefix '{prefix}'"
+    if rel in _SENSITIVE_EXACT_PATHS:
+        return f"Path matches sensitive exact path '{rel}'"
+    for suffix in _SENSITIVE_PATH_SUFFIXES:
+        if rel.endswith(suffix) or rel == suffix.lstrip("/"):
+            return f"Path matches sensitive suffix '{suffix}'"
     return "File contains credential-like content"
