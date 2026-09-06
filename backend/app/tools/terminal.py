@@ -6,6 +6,8 @@ import subprocess
 import platform
 import shlex
 import os
+import shutil
+import sys
 
 class TerminalTool(BaseTool):
     def __init__(self):
@@ -88,10 +90,15 @@ class TerminalTool(BaseTool):
             target_cwd = WorkspaceService.get_workspace_root()
 
         # 7. Security/Risk Manager execution with limits
+        exec_cmd = list(parsed_command)
+        if cmd_base.lower() in ("python", "python3") and not shutil.which(cmd_base):
+            # Fallback to active python interpreter if alias not found directly in PATH
+            exec_cmd[0] = sys.executable
+
         try:
             # shell=False is strictly required
             process = subprocess.Popen(
-                parsed_command,
+                exec_cmd,
                 shell=False,
                 cwd=str(target_cwd),
                 stdout=subprocess.PIPE,
