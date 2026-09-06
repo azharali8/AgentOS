@@ -423,42 +423,79 @@ Response:
 
 ## Voice Agent & Audio Interface
 
-AgentOS features a voice-driven autonomous software engineering interface powered by **AssemblyAI**:
+AgentOS features a dedicated **Voice Agent** interface powered by **AssemblyAI** Speech-to-Text and the **AgentOS Command Gateway**:
 
 ```text
-Microphone Audio Capture (Browser MediaRecorder)
-        |
-        v
-POST /api/v1/voice/transcribe or /api/v1/voice/execute
-        |
-AssemblyAI Speech-to-Text Provider (REST API)
-  → Secure Upload Chunking
-  → Asynchronous Audio Transcription
-  → Polling & Status Verification
-        |
-        v
-VoiceService (Intent Routing & Task Creation)
-        |
-        +---> Project Creation Intent? → ProjectCreatorService (scaffold & switch workspace)
-        |
-        +---> Standard Engineering Intent? → TaskService & Supervisor Agent
-        |
-        v
-Multi-Agent Engineering Pipeline (Coding → Testing → Debugging → Review)
-        |
-        v
-Real File Mutation & Test Verification
-        |
-        v
-Audio Synthesis Feedback (Browser SpeechSynthesis / TTS Provider)
+                     USER (Voice / Speech)
+                               │
+                               ▼
+               ┌───────────────────────────────┐
+               │          VOICE AGENT          │
+               │                               │
+               │  • AssemblyAI STT             │
+               │  • Intent Understanding       │
+               │  • Multi-Turn Conversation    │
+               │  • Confirmation Gate (Safety) │
+               │  • Natural TTS Summarizer     │
+               └───────────────┬───────────────┘
+                               │
+                               ▼
+               ┌───────────────────────────────┐
+               │    AGENTOS COMMAND GATEWAY    │
+               │                               │
+               │  • Safe Task Creation         │
+               │  • Project Scaffold / Connect │
+               │  • Test Suite Execution       │
+               │  • Codebase Inspection        │
+               │  • Failure Diagnosis          │
+               │  • Code Review & Artifacts    │
+               │  • Approval Resolution        │
+               └───────────────┬───────────────┘
+                               │
+                               ▼
+               ┌───────────────────────────────┐
+               │          SUPERVISOR           │
+               │     (Central Engineering      │
+               │     Brain & Orchestration)    │
+               └───────────────┬───────────────┘
+                               │
+                               ▼
+               ┌───────────────────────────────┐
+               │        AGENTOS ENGINE         │
+               │                               │
+               │  Coding • Debugging • Testing │
+               │  Review • Repository Intel    │
+               │  Sandbox Mutation • Artifacts │
+               └───────────────────────────────┘
 ```
+
+> **Architectural Principle**: The **Voice Agent** serves as the voice controller and conversational interface for the system. It delegates all software engineering planning and task execution to the **Supervisor** and existing specialized agents without duplicating engineering logic.
+
+### Voice Capabilities & Supported Commands
+
+The Voice Agent controls the major user-facing capabilities of AgentOS:
+
+- **Project Management**:
+  - *"Create a FastAPI URL shortener with authentication and tests."* &rarr; Scaffolds new bounded project and switches workspace.
+  - *"Create a new project."* &rarr; Multi-turn conversational flow asking for project name, archetype, and confirmation.
+  - *"Open my AgentOS project."* &rarr; Inspects project structure, manifests, and entry points.
+- **Autonomous Engineering**:
+  - *"Fix the failing authentication test."* &rarr; Dispatches debugging and code repair to Supervisor.
+  - *"Review the changes and explain what you modified."* &rarr; Triggers Reviewer agent for security and code quality audit.
+- **Testing & Failure Investigation**:
+  - *"Run the tests again and tell me the result."* &rarr; Executes test discovery and reports passed/failed counts and duration.
+  - *"Why did the tests fail?"* &rarr; Autonomous root cause diagnosis by Debugger agent.
+- **Safety & Human Approvals**:
+  - *"Wipe the database / Delete project files"* &rarr; Triggers confirmation gate: *"This operation may modify or delete files. Please say 'confirm' to proceed or 'cancel' to abort."*
+  - *"Approve action [id]"* / *"Reject action [id]"* &rarr; Resolves human-in-the-loop security gates verbally.
 
 ### Voice API Endpoints
 
-- `GET /api/v1/voice/status` — Returns active provider (`assemblyai` / `mock`), configured TTS provider, and credit/quota readiness.
+- `GET /api/v1/voice/status` — Returns active STT provider (`assemblyai` / `mock`), configured TTS provider, and operational quotas.
 - `POST /api/v1/voice/transcribe` — Uploads raw audio (`.webm`, `.wav`, `.mp3`, `.ogg`, `.m4a`) and returns high-accuracy transcript with confidence score.
-- `POST /api/v1/voice/execute` — End-to-end voice invocation: transcribes audio and immediately launches an autonomous engineering task on the active workspace.
-- `POST /api/v1/voice/synthesize` — Synthesizes task completion summaries or agent feedback into audio responses.
+- `POST /api/v1/voice/execute` — End-to-end voice invocation: transcribes audio, parses intent via Voice Agent, executes through Command Gateway, and returns natural voice summary.
+- `POST /api/v1/voice/command` — Direct natural-language text invocation for voice controller commands.
+- `POST /api/v1/voice/synthesize` — Synthesizes natural agent feedback or execution summaries into speech.
 
 ### Voice Configuration (`.env`)
 

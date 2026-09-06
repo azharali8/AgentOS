@@ -110,5 +110,6 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = str(PROJECT_ROOT / ".env")
+        extra = "ignore"
 
 settings = Settings()

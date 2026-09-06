@@ -1,9 +1,10 @@
-"""
+﻿"""
 AgentOS Voice Architecture — Voice API Router.
 
 Endpoints:
 - POST /api/v1/voice/transcribe: Transcribes audio file without starting task.
-- POST /api/v1/voice/execute: Transcribes audio and immediately launches the real Supervisor pipeline.
+- POST /api/v1/voice/execute: Transcribes audio and immediately launches the VoiceAgent & Supervisor pipeline.
+- POST /api/v1/voice/command: Direct text command processing for VoiceAgent.
 - POST /api/v1/voice/synthesize: Synthesizes text to speech.
 - GET /api/v1/voice/status: Returns voice subsystem status without exposing keys.
 """
@@ -14,8 +15,10 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field
 
 from backend.app.auth.service import AuthenticatedUser, get_current_user
+from backend.app.voice.agent.agent import VoiceAgent
 from backend.app.voice.providers.assemblyai import (
     AssemblyAIAuthError,
     AssemblyAIRateLimitError,
@@ -33,6 +36,11 @@ from backend.app.voice.service import InvalidAudioError, VoiceService
 logger = logging.getLogger("agentos.voice.router")
 
 router = APIRouter(prefix="/voice", tags=["v1-voice"])
+
+
+class TextCommandRequest(BaseModel):
+    command: str = Field(..., min_length=1, max_length=2000, description="Text voice command")
+    session_id: str = Field(default="default-session", description="Session identifier for multi-turn context")
 
 
 @router.get("/status", response_model=VoiceProviderStatus)
@@ -75,14 +83,15 @@ async def transcribe_audio(
 @router.post("/execute", response_model=VoiceExecuteResponse)
 async def execute_voice_command(
     file: UploadFile = File(...),
+    session_id: str = Form(default="default-session"),
     auto_start: bool = Form(default=True),
     sync: bool = Form(default=False),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> VoiceExecuteResponse:
     """
     Core Voice Endpoint:
-    Uploads microphone audio -> transcribes -> submits to existing Supervisor pipeline.
-    Returns live task ID and TTS summary response.
+    Uploads microphone audio -> transcribes -> processes via VoiceAgent & AgentOSCommandGateway.
+    Returns live task ID, project metadata, and TTS summary response.
     """
     try:
         audio_bytes = await file.read()
@@ -91,6 +100,7 @@ async def execute_voice_command(
             audio_bytes=audio_bytes,
             mime_type=mime_type,
             user_id=user.user_id,
+            session_id=session_id,
             auto_start=auto_start,
             sync=sync,
         )
@@ -105,6 +115,32 @@ async def execute_voice_command(
     except Exception as exc:
         logger.error("Unhandled voice execution error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Voice command execution failed: {str(exc)}")
+
+
+@router.post("/command", response_model=VoiceExecuteResponse)
+async def execute_text_command(
+    req: TextCommandRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> VoiceExecuteResponse:
+    """Process a typed voice-style command directly through the VoiceAgent."""
+    try:
+        conv = VoiceService.get_conversation_state(req.session_id)
+        agent = VoiceAgent(conversation=conv)
+        agent_res = agent.process(transcript=req.command, user_id=user.user_id)
+
+        return VoiceExecuteResponse(
+            status=agent_res.status,
+            transcript=req.command,
+            task_id=agent_res.task_id,
+            project_created=agent_res.project_created,
+            project_path=agent_res.project_path,
+            tts_summary=agent_res.tts_summary,
+            provider="text",
+            confidence=1.0,
+        )
+    except Exception as exc:
+        logger.error("Text command processing error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Command processing failed: {str(exc)}")
 
 
 @router.post("/synthesize", response_model=TTSResponse)

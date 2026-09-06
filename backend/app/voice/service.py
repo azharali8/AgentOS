@@ -1,24 +1,17 @@
-"""
+﻿"""
 AgentOS Voice Architecture — Voice Service.
 
 Central coordinator for voice input processing:
 - Provider lifecycle & resolution (AssemblyAI vs Mock)
 - Audio payload validation & size clamping
-- Auditable event emission (voice.requested, voice.transcription.*, voice.task.*)
-- Delegates intent classification and command routing to VoiceAgent
+- Auditable event emission (voice.requested, voice.transcription.*, voice.agent.*)
+- Delegates intent understanding & routing to dedicated VoiceAgent & AgentOSCommandGateway
 - Generates natural, concise voice feedback summary for Text-to-Speech
-
-Architecture:
-    VoiceService (API boundary & provider lifecycle)
-        → VoiceAgent (intent classification + command routing)
-            → CommandRouter → AgentOSCommandGateway
-                → TaskService / ProjectCreatorService / MultiAgentService
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +20,8 @@ from backend.app.models.task import TaskRequest, TaskStatus
 from backend.app.services.event_service import EventService
 from backend.app.services.multi_agent_service import MultiAgentService
 from backend.app.services.task_service import TaskService
+from backend.app.voice.agent.agent import VoiceAgent, VoiceAgentResult
+from backend.app.voice.agent.conversation import ConversationState
 from backend.app.voice.providers.assemblyai import AssemblyAIProvider
 from backend.app.voice.providers.base import SpeechToTextProvider, TextToSpeechProvider
 from backend.app.voice.providers.mock import BrowserTextToSpeechProvider, MockSpeechToTextProvider
@@ -50,7 +45,7 @@ _ALLOWED_AUDIO_MIMES = [
     "audio/mp4",
     "audio/aac",
     "audio/flac",
-    "application/octet-stream",  # often sent by generic browser form data
+    "application/octet-stream",
 ]
 
 
@@ -65,10 +60,11 @@ class InvalidAudioError(VoiceServiceError):
 
 
 class VoiceService:
-    """Service orchestrating voice recognition, execution, and audio synthesis."""
+    """Service orchestrating voice recognition, VoiceAgent execution, and audio synthesis."""
 
     _stt_provider_override: Optional[SpeechToTextProvider] = None
     _tts_provider_override: Optional[TextToSpeechProvider] = None
+    _session_conversations: Dict[str, ConversationState] = {}
 
     @classmethod
     def set_stt_provider(cls, provider: Optional[SpeechToTextProvider]) -> None:
@@ -89,7 +85,6 @@ class VoiceService:
         api_key = settings.ASSEMBLYAI_API_KEY.strip()
         preferred_provider = (settings.VOICE_PROVIDER or "assemblyai").lower().strip()
 
-        # In test or dev without key, fallback safely to mock to prevent credit usage / crash
         if preferred_provider == "assemblyai" and api_key:
             return AssemblyAIProvider(
                 api_key=api_key,
@@ -104,6 +99,13 @@ class VoiceService:
         if cls._tts_provider_override is not None:
             return cls._tts_provider_override
         return BrowserTextToSpeechProvider()
+
+    @classmethod
+    def get_conversation_state(cls, session_id: str = "default-session") -> ConversationState:
+        """Retrieve or create session-scoped ConversationState."""
+        if session_id not in cls._session_conversations or cls._session_conversations[session_id].is_expired():
+            cls._session_conversations[session_id] = ConversationState(session_id=session_id)
+        return cls._session_conversations[session_id]
 
     @classmethod
     def validate_audio(cls, audio_bytes: bytes, mime_type: str) -> None:
@@ -162,74 +164,27 @@ class VoiceService:
             raise
 
     @classmethod
-    def _detect_project_creation(cls, transcript: str) -> Optional[Dict[str, str]]:
-        """
-        Check if transcript is requesting to create a brand new project.
-        E.g.:
-        - 'AgentOS, create a FastAPI URL shortener with authentication and tests.'
-        - 'Create a new project named TaskFlow'
-        - 'Scaffold a Python CLI project called MyTool'
-        """
-        lower = transcript.lower()
-
-        # Check for explicit or implicit project creation phrases
-        triggers = [
-            "create a new project",
-            "create new project",
-            "scaffold project",
-            "scaffold a project",
-            "create a fastapi",
-            "create a python",
-            "create a react",
-            "create a nextjs",
-            "create a web app",
-            "create an app",
-            "create a url shortener",
-        ]
-
-        is_creation = any(t in lower for t in triggers)
-        if not is_creation:
-            return None
-
-        # 1. Look for explicit project name patterns: "named <name>", "called <name>", "project <name>"
-        match = re.search(r"(?:project|called|named)\s+([a-zA-Z0-9_\-]+)", transcript, re.IGNORECASE)
-        if match and match.group(1).lower() not in {"a", "an", "the", "with", "for", "in"}:
-            proj_name = match.group(1)
-        else:
-            # 2. Derive a clean name from key technology or task keywords
-            if "url shortener" in lower or "url-shortener" in lower:
-                proj_name = "UrlShortenerApp"
-            elif "fastapi" in lower:
-                proj_name = "FastApiProject"
-            elif "todo" in lower:
-                proj_name = "TodoApp"
-            elif "api" in lower:
-                proj_name = "ApiProject"
-            else:
-                proj_name = "NewAgentOSProject"
-
-        return {"name": proj_name, "instruction": transcript}
-
-    @classmethod
     async def execute_voice_command(
         cls,
         audio_bytes: bytes,
         mime_type: str = "audio/webm",
         user_id: Optional[str] = None,
+        session_id: str = "default-session",
         auto_start: bool = True,
         sync: bool = False,
     ) -> VoiceExecuteResponse:
         """
-        Core Voice Execution Workflow:
+        Voice Execution Workflow:
         1. Transcribe audio via active provider (AssemblyAI or Mock)
-        2. Feed transcript directly into the EXISTING AgentOS Supervisor / TaskService pipeline
-        3. No fake animations, no duplicate voice supervisor
-        4. Return live execution status & natural TTS response
+        2. Delegate intent classification and execution to VoiceAgent & AgentOSCommandGateway
+        3. Emit auditable voice lifecycle events
+        4. If a task was created and auto_start is True, trigger MultiAgentService
+        5. Return natural TTS feedback and structured response
         """
         EventService.record_event(
             task_id="system-voice",
             event_type="voice.requested",
-            payload={"user_id": user_id, "mime_type": mime_type},
+            payload={"user_id": user_id, "session_id": session_id, "mime_type": mime_type},
         )
 
         transcription = await cls.transcribe_audio(audio_bytes, mime_type)
@@ -244,56 +199,28 @@ class VoiceService:
                 confidence=transcription.confidence,
             )
 
-        # Check if voice command is asking to scaffold a project
-        proj_creation = cls._detect_project_creation(transcript_text)
-        project_created = False
-        project_path = None
+        # Retrieve conversation context and execute via VoiceAgent
+        conv = cls.get_conversation_state(session_id)
+        agent = VoiceAgent(conversation=conv)
+        agent_res: VoiceAgentResult = agent.process(transcript=transcript_text, user_id=user_id)
 
-        if proj_creation:
-            from backend.app.services.project_creator import ProjectCreatorService
-            try:
-                from backend.app.services.workspace_service import WorkspaceService
-                from backend.app.config.settings import PROJECT_ROOT
-                agentos_root = Path(PROJECT_ROOT).resolve()
-                current_root = WorkspaceService.get_workspace_root()
-
-                # Determine a safe project parent location
-                if current_root.resolve() == agentos_root / "workspace":
-                    # Default workspace inside repo -> use workspace itself or tmp/projects for safe creation
-                    parent_dir = current_root
-                elif current_root.exists() and current_root.is_dir() and not current_root.resolve().is_relative_to(agentos_root):
-                    # Outside existing workspace -> use its parent
-                    parent_dir = current_root.parent
-                else:
-                    parent_dir = current_root
-
-                proj_meta = ProjectCreatorService.create_project(
-                    name=proj_creation["name"],
-                    location=str(parent_dir),
-                    instruction=transcript_text,
-                )
-                project_created = True
-                project_path = proj_meta["path"]
-            except Exception as exc:
-                logger.warning("Project creation through voice skipped or failed: %s; falling back to normal task", exc)
-
-        # Standard AgentOS task pipeline
-        task_req = TaskRequest(instruction=transcript_text)
-        task_record = TaskService.create_task(request=task_req)
-        task_id = task_record.task_id
+        task_id = agent_res.task_id
+        final_status = "planning" if (auto_start and task_id and agent_res.status in ("created", "planning")) else agent_res.status
 
         EventService.record_event(
-            task_id=task_id,
-            event_type="voice.task.submitted",
+            task_id=task_id or "system-voice",
+            event_type="voice.agent.executed",
             payload={
-                "instruction": transcript_text,
-                "project_created": project_created,
-                "project_path": project_path,
+                "intent_type": agent_res.intent_type.value if hasattr(agent_res.intent_type, "value") else str(agent_res.intent_type),
+                "status": final_status,
+                "project_created": agent_res.project_created,
+                "project_path": agent_res.project_path,
                 "provider": transcription.provider,
             },
         )
 
-        if auto_start:
+        # Trigger background execution if a new engineering task was created
+        if task_id and auto_start and agent_res.status in ("created", "planning", "ok"):
             import threading
 
             def _bg_execute():
@@ -323,18 +250,13 @@ class VoiceService:
                 )
                 thread.start()
 
-        # Generate natural TTS summary
-        tts_text = f"Got it. Starting engineering task: {transcript_text[:90]}"
-        if len(transcript_text) > 90:
-            tts_text += "..."
-
         return VoiceExecuteResponse(
-            status="planning" if auto_start else "created",
+            status=final_status,
             transcript=transcript_text,
-            task_id=task_id,
-            project_created=project_created,
-            project_path=project_path,
-            tts_summary=tts_text,
+            task_id=agent_res.task_id,
+            project_created=agent_res.project_created,
+            project_path=agent_res.project_path,
+            tts_summary=agent_res.tts_summary,
             provider=transcription.provider,
             confidence=transcription.confidence,
         )
