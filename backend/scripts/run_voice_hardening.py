@@ -30,6 +30,7 @@ async def main():
     print('=' * 70)
 
     repo_root = Path('.').resolve()
+    initial_ws = settings.WORKSPACE_ROOT
     tmp_projects_dir = repo_root / 'tmp' / 'voice_hardening_run'
     tmp_projects_dir.mkdir(parents=True, exist_ok=True)
 
@@ -212,9 +213,22 @@ def test_shorten_and_redirect():
         except Exception as exc:
             print(f'  [FAIL] Network error connecting to AssemblyAI: {exc}')
 
+    # Restore original workspace root to prevent side effects on other tests/workflows
+    settings.WORKSPACE_ROOT = initial_ws
+    os.environ['WORKSPACE_ROOT'] = initial_ws
+    env_file = repo_root / '.env'
+    if env_file.exists():
+        lines = env_file.read_text(encoding='utf-8').splitlines(keepends=True)
+        for i, line in enumerate(lines):
+            if line.startswith('WORKSPACE_ROOT='):
+                lines[i] = f'WORKSPACE_ROOT={initial_ws}\n'
+                break
+        env_file.write_text(''.join(lines), encoding='utf-8')
+
     print('\n' + '=' * 70)
     print('ALL VOICE HARDENING & USER JOURNEY VERIFICATIONS COMPLETED SUCCESSFULLY!')
     print('=' * 70)
 
 if __name__ == '__main__':
     asyncio.run(main())
+

@@ -41,6 +41,9 @@ def reset_workspace_root_setting():
     default_ws = str(PROJECT_ROOT / "workspace")
     old_setting = settings.WORKSPACE_ROOT
     old_env = os.environ.get("WORKSPACE_ROOT")
+    # Ensure standard workspace root before each test starts
+    settings.WORKSPACE_ROOT = default_ws
+    os.environ["WORKSPACE_ROOT"] = default_ws
     yield
     # Unconditionally restore to default workspace root to prevent test leakage
     settings.WORKSPACE_ROOT = default_ws
