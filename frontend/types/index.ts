@@ -101,6 +101,8 @@ export interface ModelInfo {
 export interface ModelsStatusResponse {
   active_provider: string;
   configured_model: string;
+  status: string;
+  error?: string | null;
   models: ModelInfo[];
 }
 
@@ -189,5 +191,4 @@ export interface VoiceTranscriptionResponse {
   provider: string;
   language_code?: string;
 }
-
 

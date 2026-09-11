@@ -1,502 +1,201 @@
-'use client';
+"use client";
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import {
-  Mic,
-  MicOff,
-  Square,
-  Sparkles,
-  Loader2,
-  AlertCircle,
-  Volume2,
-  VolumeX,
-  Send,
-  X,
-  Radio,
-  CheckCircle2,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Mic, Square, X, Volume2, VolumeX, Loader2 } from 'lucide-react';
 import { AgentOSClient } from '../../lib/api';
-import { VoiceExecuteResponse } from '../../types';
+import { VoiceEndpoint } from '../../lib/voice-endpoint';
 
 interface VoiceControlProps {
   client: AgentOSClient;
   onTaskCreated?: (taskId: string) => void;
-  onTranscriptReady?: (transcript: string) => void;
   className?: string;
   compact?: boolean;
 }
 
-type VoiceState = 'idle' | 'recording' | 'transcribing' | 'review' | 'executing' | 'error';
-
-export const VoiceControl: React.FC<VoiceControlProps> = ({
-  client,
-  onTaskCreated,
-  onTranscriptReady,
-  className = '',
-  compact = false,
-}) => {
-  const [state, setState] = useState<VoiceState>('idle');
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
+export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated, className = ''}) => {
+  const [state, setState] = useState<'idle' | 'listening' | 'processing' | 'error'>('idle');
   const [transcript, setTranscript] = useState('');
-  const [ttsFeedback, setTtsFeedback] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [ttsMuted, setTtsMuted] = useState(false);
-  const [isAssemblyAI, setIsAssemblyAI] = useState(true);
+  const [feedback, setFeedback] = useState('');
+  const [muted, setMuted] = useState(false);
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const active = useRef(false);
+  const session = useRef('');
+  const recorder = useRef<MediaRecorder | null>(null);
+  const context = useRef<AudioContext | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const generation = useRef(0);
+  const busy = useRef(false);
+  const mounted = useRef(true);
+  const startRef = useRef<() => void>(() => {});
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Check voice provider status on mount
-  useEffect(() => {
-    client.getVoiceStatus().then((status) => {
-      setIsAssemblyAI(status?.stt_provider?.toLowerCase().includes('assemblyai') ?? true);
-    }).catch(() => {});
-  }, [client]);
-
-  // Clean up timer on unmount
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+  const release = useCallback(() => {
+    if (timer.current) clearInterval(timer.current);
+    timer.current = null;
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current = null;
+    if (context.current) void context.current.close().catch(() => {});
+    context.current = null;
   }, []);
 
-  const speakText = useCallback((text: string) => {
-    if (ttsMuted || typeof window === 'undefined' || !window.speechSynthesis) return;
-    try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.05;
-      utterance.pitch = 1.0;
-      window.speechSynthesis.speak(utterance);
-    } catch (e) {
-      console.warn('Browser SpeechSynthesis error:', e);
+  const cancel = useCallback(() => {
+    active.current = false;
+    generation.current++;
+    if (recorder.current?.state === 'recording') {
+      recorder.current.onstop = null;
+      recorder.current.stop();
     }
-  }, [ttsMuted]);
+    release(); busy.current = false;
+    window.speechSynthesis?.cancel();
+    if (mounted.current) { setState('idle'); setSpeaking(false); }
+  }, [release]);
 
-  const startRecording = async () => {
-    setErrorMsg(null);
-    setTranscript('');
-    setTtsFeedback(null);
-    setRecordingSeconds(0);
-    audioChunksRef.current = [];
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; cancel(); };
+  }, [cancel]);
 
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setErrorMsg('Microphone recording is not supported by your browser.');
-      setState('error');
-      return;
-    }
+  const speak = useCallback((text: string, after?: () => void) => {
+    if (mutedRef.current || !window.speechSynthesis) { after?.(); return; }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text.slice(0, 1800));
+    setSpeaking(true);
+    utterance.onend = () => { if (mounted.current) setSpeaking(false); after?.(); };
+    utterance.onerror = () => { if (mounted.current) { setSpeaking(false); setFeedback('Speech playback failed. You can read the response and use Voice to continue.'); } };
+    // Do not restart listening if playback failed; allow the user to retry.
+    window.speechSynthesis.speak(utterance);
+  }, []);
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-
-      let mimeType = 'audio/webm;codecs=opus';
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
-      }
-
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        // Stop all audio tracks to release microphone hardware
-        stream.getTracks().forEach((track) => track.stop());
-
-        const capturedBlob = new Blob(audioChunksRef.current, {
-          type: recorder.mimeType || 'audio/webm',
-        });
-        setAudioBlob(capturedBlob);
-
-        if (capturedBlob.size < 100) {
-          setErrorMsg('No audible sound detected. Please try speaking again.');
-          setState('error');
-          return;
-        }
-
-        // Send to backend for transcription
-        await handleTranscribe(capturedBlob);
-      };
-
-      recorder.start(250); // chunk every 250ms
-      setState('recording');
-
-      // Start recording timer
-      timerRef.current = setInterval(() => {
-        setRecordingSeconds((prev) => {
-          if (prev >= 60) {
-            // Auto stop at 60s
-            stopRecording();
-            return 60;
-          }
-          return prev + 1;
-        });
-      }, 1000);
-    } catch (err: any) {
-      console.error('Microphone access denied or failed:', err);
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setErrorMsg('Microphone access denied. Please grant microphone permission in your browser.');
-      } else {
-        setErrorMsg(err.message || 'Failed to start microphone recording.');
-      }
-      setState('error');
-    }
-  };
-
-  const stopRecording = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
-  };
-
-  const cancelRecording = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    if (mediaRecorderRef.current) {
+  useEffect(() => {
+    if (!taskId) return;
+    let disposed = false;
+    let polling = false;
+    let announced = '';
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
       try {
-        if (mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.stop();
+        const task = await client.getTask(taskId);
+        if (disposed) return;
+        if (['COMPLETED', 'FAILED', 'CANCELLED', 'WAITING_APPROVAL'].includes(task.status) && task.status !== announced) {
+          // Do not interrupt a user's utterance or an in-flight conversational turn.
+          if (busy.current || window.speechSynthesis?.speaking) return;
+          announced = task.status;
+          const text = task.status === 'WAITING_APPROVAL'
+            ? 'This task needs approval. Review the proposed changes in Approvals.'
+            : task.result_summary || task.error || `Task ${task.status.toLowerCase()}.`;
+          setFeedback(text);
+          if (task.status !== 'WAITING_APPROVAL') setTaskId(null);
+          if (active.current) { setOpen(true); speak(text); }
         }
-        mediaRecorderRef.current.stream?.getTracks().forEach((t) => t.stop());
-      } catch {}
-    }
-    audioChunksRef.current = [];
-    setAudioBlob(null);
-    setState('idle');
-    setRecordingSeconds(0);
-    setErrorMsg(null);
-  };
+      } catch { /* The execution view also reports stream connectivity. Retry polling. */ }
+      finally { polling = false; }
+    };
+    const interval = setInterval(poll, 2000);
+    void poll();
+    return () => { disposed = true; clearInterval(interval); };
+  }, [taskId, client, speak]);
 
-  const handleTranscribe = async (blob: Blob) => {
-    setState('transcribing');
-    setErrorMsg(null);
+  const start = async () => {
+    if (busy.current) return;
+    busy.current = true;
+    active.current = true;
+    const turn = ++generation.current;
+    setOpen(true); setFeedback('');
+    window.speechSynthesis?.cancel();
     try {
-      const res = await client.transcribeAudio(blob);
-      const recognized = res.transcript?.trim() || '';
-      if (!recognized) {
-        setErrorMsg('No speech recognized. Please try speaking closer to your microphone.');
-        setState('error');
-        return;
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder || !window.AudioContext) {
+        throw new Error('This browser cannot capture microphone audio. Use a supported browser over HTTPS or localhost.');
       }
-
-      setTranscript(recognized);
-      if (onTranscriptReady) {
-        onTranscriptReady(recognized);
+      const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true}});
+      if (!mounted.current || turn !== generation.current) { stream.getTracks().forEach(t => t.stop()); return; }
+      streamRef.current = stream;
+      const audio = new AudioContext();
+      context.current = audio;
+      await audio.resume();
+      if (!mounted.current || turn !== generation.current) { release(); return; }
+      const analyser = audio.createAnalyser();
+      analyser.fftSize = 2048;
+      audio.createMediaStreamSource(stream).connect(analyser);
+      const data = new Float32Array(analyser.fftSize);
+      const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported(t));
+      const capture = new MediaRecorder(stream, mime ? {mimeType: mime} : undefined);
+      recorder.current = capture;
+      const chunks: Blob[] = [];
+      const endpoint = new VoiceEndpoint(performance.now());
+      capture.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+      capture.onstop = async () => {
+        release();
+        if (!mounted.current || turn !== generation.current) return;
+        if (!endpoint.heardSpeech) { busy.current = false; setState('error'); setFeedback('No speech detected. Please try again.'); return; }
+        setState('processing');
+        try {
+          if (!session.current) session.current = crypto.randomUUID();
+          // The single combined endpoint waits for a completed provider transcript.
+          const result = await client.executeVoiceCommand(new Blob(chunks, {type: capture.mimeType || 'audio/webm'}), true, false, session.current);
+          if (!mounted.current || turn !== generation.current) return;
+          setTranscript(result.transcript); setFeedback(result.tts_summary);
+          setState('idle'); busy.current = false;
+          const continueConversation = !['failed', 'error', 'denied'].includes(result.status);
+          speak(result.tts_summary, continueConversation ? () => {
+            if (mounted.current && turn === generation.current) startRef.current();
+          } : undefined);
+          if (result.task_id) {
+            setTaskId(result.task_id);
+            onTaskCreated?.(result.task_id);
+          }
+        } catch (err) {
+          if (mounted.current && turn === generation.current) {
+            busy.current = false; setState('error');
+            setFeedback(err instanceof Error ? err.message : 'Voice execution failed.');
+          }
+        }
+      };
+      capture.onerror = () => { cancel(); setState('error'); setFeedback('Microphone recording failed. Please retry.'); };
+      capture.start(250);
+      setState('listening');
+      timer.current = setInterval(() => {
+        const now = performance.now();
+        analyser.getFloatTimeDomainData(data);
+        const rms = Math.sqrt(data.reduce((sum, value) => sum + value * value, 0) / data.length);
+        const action = endpoint.sample(rms, now);
+        if (action === 'finish' && capture.state === 'recording') capture.stop();
+        else if (action === 'discard') {
+          // A time limit is not an utterance boundary: discard truncated speech.
+          cancel(); active.current = true;
+          setState(endpoint.heardSpeech ? 'error' : 'idle');
+          setFeedback(endpoint.heardSpeech ? 'Recording timed out. Please speak a shorter instruction.' : 'Microphone paused after silence. Use Voice when you are ready to continue.');
+        }
+      }, 50);
+    } catch (err) {
+      release(); busy.current = false;
+      if (mounted.current && turn === generation.current) {
+        setState('error'); setFeedback(err instanceof Error ? err.message : 'Microphone access failed.');
       }
-      setState('review');
-    } catch (err: any) {
-      console.error('Transcription failed:', err);
-      setErrorMsg(err.message || 'Speech-to-Text processing failed.');
-      setState('error');
     }
   };
+  startRef.current = () => { void start(); };
 
-  const handleExecute = async () => {
-    if (!audioBlob && !transcript.trim()) return;
-    setState('executing');
-    setErrorMsg(null);
-
-    try {
-      let res: VoiceExecuteResponse;
-      if (audioBlob) {
-        res = await client.executeVoiceCommand(audioBlob, true, false);
-      } else {
-        // Fallback to text task creation if user edited the transcript
-        const task = await client.createTask(transcript.trim(), 1);
-        res = {
-          status: 'planning',
-          transcript: transcript.trim(),
-          task_id: task.task_id,
-          project_created: false,
-          tts_summary: `Starting task: ${transcript.trim().slice(0, 80)}`,
-          provider: 'text',
-        };
-      }
-
-      setTtsFeedback(res.tts_summary);
-      speakText(res.tts_summary);
-
-      if (res.task_id && onTaskCreated) {
-        onTaskCreated(res.task_id);
-      }
-
-      // Briefly show success before returning to idle
-      setTimeout(() => {
-        setState('idle');
-        setTranscript('');
-        setAudioBlob(null);
-      }, 1500);
-    } catch (err: any) {
-      console.error('Voice execution failed:', err);
-      setErrorMsg(err.message || 'Failed to submit voice task to AgentOS.');
-      setState('error');
-    }
-  };
-
-  const formatSeconds = (sec: number) => {
-    const mins = Math.floor(sec / 60);
-    const secs = sec % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  // Compact Header / Nav Bar Variant
-  if (compact) {
-    return (
-      <div className={`relative inline-flex items-center ${className}`}>
-        {state === 'idle' && (
-          <button
-            type="button"
-            onClick={startRecording}
-            title="Voice Command (AssemblyAI)"
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-xl text-xs font-semibold shadow-2xs transition-all"
-          >
-            <Mic className="w-3.5 h-3.5 text-indigo-600" />
-            <span className="hidden sm:inline">Voice</span>
-          </button>
-        )}
-
-        {state === 'recording' && (
-          <button
-            type="button"
-            onClick={stopRecording}
-            title="Click to Finish Recording"
-            className="flex items-center space-x-2 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-all animate-pulse"
-          >
-            <Square className="w-3 h-3 fill-white" />
-            <span>{formatSeconds(recordingSeconds)}</span>
-          </button>
-        )}
-
-        {state === 'transcribing' && (
-          <div className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-xl text-xs font-medium">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            <span className="hidden sm:inline">Transcribing...</span>
-          </div>
-        )}
+  return <div className={`relative ${className}`}>
+    <button type="button" onClick={() => { if (state === 'listening') recorder.current?.stop(); else if (!busy.current) void start(); }}
+      disabled={state === 'processing'} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-indigo-50 text-indigo-700 text-xs font-semibold">
+      {state === 'processing' ? <Loader2 className="w-4 h-4 animate-spin" /> : state === 'listening' ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+      {state === 'listening' ? 'Finish turn' : state === 'processing' ? 'Processing voice' : 'Voice'}
+    </button>
+    {open && <div className="absolute right-0 top-12 w-80 max-w-[90vw] bg-white border border-slate-200 rounded-2xl shadow-lg p-4 space-y-3 z-50" role="status" aria-live="polite">
+      <div className="flex justify-between items-center text-xs font-semibold">
+        <span>{speaking ? 'Speaking' : state === 'listening' ? 'Listening — pause when finished' : state === 'processing' ? 'Recognizing and processing your request' : 'Voice Supervisor'}</span>
+        <button aria-label={muted ? 'Unmute speech' : 'Mute speech'} onClick={() => { setMuted(!muted); if (!muted) window.speechSynthesis?.cancel(); }}>
+          {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+        </button>
       </div>
-    );
-  }
-
-  // Full Rich Card Variant (Dashboard Integration)
-  return (
-    <div className={`transition-all duration-200 ${className}`}>
-      {/* 1. Idle state — Mic Button */}
-      {state === 'idle' && (
-        <div className="flex items-center space-x-2">
-          <button
-            type="button"
-            onClick={startRecording}
-            className="flex items-center space-x-2 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-xl text-xs font-semibold shadow-2xs transition-all group"
-          >
-            <div className="w-2 h-2 rounded-full bg-indigo-600 group-hover:animate-ping" />
-            <Mic className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Speak Command</span>
-          </button>
-          <span className="text-[11px] text-slate-400">
-            Powered by AssemblyAI
-          </span>
-        </div>
-      )}
-
-      {/* 2. Recording state */}
-      {state === 'recording' && (
-        <div className="flex items-center justify-between p-3.5 bg-rose-50/80 border border-rose-200 rounded-2xl animate-in fade-in duration-150">
-          <div className="flex items-center space-x-3">
-            <div className="relative flex items-center justify-center">
-              <span className="absolute w-6 h-6 rounded-full bg-rose-500/30 animate-ping" />
-              <span className="w-3 h-3 rounded-full bg-rose-600" />
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-bold text-rose-900">AgentOS is listening...</span>
-                <span className="font-mono text-xs font-semibold text-rose-700 bg-rose-100/80 px-2 py-0.5 rounded-md">
-                  {formatSeconds(recordingSeconds)}
-                </span>
-              </div>
-              <p className="text-[11px] text-rose-600/80 mt-0.5">
-                Speak your engineering instruction clearly into your microphone
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <button
-              type="button"
-              onClick={cancelRecording}
-              className="p-1.5 text-rose-400 hover:text-rose-700 hover:bg-rose-100/80 rounded-xl transition-colors"
-              title="Cancel recording"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={stopRecording}
-              className="flex items-center space-x-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all"
-            >
-              <Square className="w-3 h-3 fill-white" />
-              <span>Finish &amp; Transcribe</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 3. Transcribing state */}
-      {state === 'transcribing' && (
-        <div className="flex items-center justify-between p-3.5 bg-indigo-50/60 border border-indigo-100 rounded-2xl animate-in fade-in">
-          <div className="flex items-center space-x-3">
-            <Loader2 className="w-5 h-5 text-indigo-600 animate-spin" />
-            <div>
-              <span className="text-xs font-bold text-indigo-900">
-                Transcribing with AssemblyAI...
-              </span>
-              <p className="text-[11px] text-indigo-600/80">
-                Converting your voice into a structured engineering command
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={cancelRecording}
-            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {/* 4. Review & Confirm state */}
-      {state === 'review' && (
-        <div className="p-4 bg-white border border-indigo-100 rounded-2xl shadow-sm space-y-3 animate-in fade-in zoom-in-95">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <Sparkles className="w-4 h-4 text-indigo-600" />
-              <span className="text-xs font-bold text-slate-900">Voice Command Recognized</span>
-              <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md font-medium">
-                AssemblyAI
-              </span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <button
-                type="button"
-                onClick={() => setTtsMuted(!ttsMuted)}
-                title={ttsMuted ? 'Unmute voice feedback' : 'Mute voice feedback'}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
-              >
-                {ttsMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-indigo-600" />}
-              </button>
-              <button
-                type="button"
-                onClick={cancelRecording}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
-                title="Discard transcript"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-
-          <div className="relative">
-            <textarea
-              value={transcript}
-              onChange={(e) => setTranscript(e.target.value)}
-              rows={2}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-sans focus:outline-none focus:ring-1 focus:ring-indigo-500/30 resize-none leading-relaxed"
-              placeholder="Edit recognized command if needed..."
-            />
-          </div>
-
-          <div className="flex items-center justify-between pt-1">
-            <button
-              type="button"
-              onClick={startRecording}
-              className="text-xs text-slate-500 hover:text-indigo-600 font-medium"
-            >
-              Re-record voice
-            </button>
-            <div className="flex items-center space-x-2">
-              <button
-                type="button"
-                onClick={cancelRecording}
-                className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-xl font-medium"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleExecute}
-                disabled={!transcript.trim()}
-                className="flex items-center space-x-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition-all"
-              >
-                <Send className="w-3.5 h-3.5" />
-                <span>Execute with Supervisor</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 5. Executing state */}
-      {state === 'executing' && (
-        <div className="flex items-center space-x-3 p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl animate-in fade-in">
-          <Loader2 className="w-5 h-5 text-emerald-600 animate-spin shrink-0" />
-          <div className="flex-1">
-            <span className="text-xs font-bold text-emerald-900">
-              Delegating to AgentOS Supervisor...
-            </span>
-            <p className="text-[11px] text-emerald-700 mt-0.5 truncate">
-              {ttsFeedback || `Starting: ${transcript.slice(0, 60)}...`}
-            </p>
-          </div>
-          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-        </div>
-      )}
-
-      {/* 6. Error state */}
-      {state === 'error' && (
-        <div className="flex items-start justify-between p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-700 animate-in fade-in">
-          <div className="flex items-start space-x-2.5">
-            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-bold text-rose-900">Voice Recognition Error</span>
-              <p className="text-[11px] text-rose-700 mt-0.5">{errorMsg || 'An unknown error occurred.'}</p>
-            </div>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              type="button"
-              onClick={startRecording}
-              className="px-2.5 py-1 bg-rose-600 text-white rounded-lg text-xs font-semibold hover:bg-rose-700 transition-colors"
-            >
-              Retry
-            </button>
-            <button
-              type="button"
-              onClick={cancelRecording}
-              className="p-1 text-rose-500 hover:text-rose-700"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+      {transcript && <div><p className="text-[10px] text-slate-500">What AgentOS heard</p><p className="text-xs">{transcript}</p></div>}
+      {feedback && <p className={`text-xs whitespace-pre-wrap max-h-48 overflow-auto ${state === 'error' ? 'text-rose-700' : 'text-slate-700'}`}>{feedback}</p>}
+      <button className="text-xs text-slate-500 flex gap-1" onClick={() => { cancel(); setOpen(false); }}><X className="w-3 h-3" />{state === 'listening' ? 'End voice session' : 'Close voice'}</button>
+    </div>}
+  </div>;
 };

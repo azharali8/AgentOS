@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import threading
 
 from backend.app.config.settings import settings
 from backend.app.models.task import TaskRequest, TaskStatus
@@ -64,7 +65,8 @@ class VoiceService:
 
     _stt_provider_override: Optional[SpeechToTextProvider] = None
     _tts_provider_override: Optional[TextToSpeechProvider] = None
-    _session_conversations: Dict[str, ConversationState] = {}
+    _session_conversations: Dict[tuple, ConversationState] = {}
+    _conversation_lock = threading.RLock()
 
     @classmethod
     def set_stt_provider(cls, provider: Optional[SpeechToTextProvider]) -> None:
@@ -90,8 +92,10 @@ class VoiceService:
                 api_key=api_key,
                 timeout_seconds=settings.VOICE_TIMEOUT_SECONDS,
             )
-        else:
+        if preferred_provider == "mock":
             return MockSpeechToTextProvider()
+        from backend.app.voice.providers.assemblyai import AssemblyAIAuthError
+        raise AssemblyAIAuthError("Configure AssemblyAI before using voice execution.")
 
     @classmethod
     def get_tts_provider(cls) -> TextToSpeechProvider:
@@ -101,11 +105,14 @@ class VoiceService:
         return BrowserTextToSpeechProvider()
 
     @classmethod
-    def get_conversation_state(cls, session_id: str = "default-session") -> ConversationState:
-        """Retrieve or create session-scoped ConversationState."""
-        if session_id not in cls._session_conversations or cls._session_conversations[session_id].is_expired():
-            cls._session_conversations[session_id] = ConversationState(session_id=session_id)
-        return cls._session_conversations[session_id]
+    def get_conversation_state(cls, session_id: str = "default-session", user_id: Optional[str] = None) -> ConversationState:
+        """Keep different authenticated users' clarification/approval turns separate."""
+        key = (user_id, session_id)
+        with cls._conversation_lock:
+            cls._session_conversations = {k: v for k, v in cls._session_conversations.items() if not v.is_expired()}
+            if key not in cls._session_conversations:
+                cls._session_conversations[key] = ConversationState(session_id=session_id)
+            return cls._session_conversations[key]
 
     @classmethod
     def validate_audio(cls, audio_bytes: bytes, mime_type: str) -> None:
@@ -172,6 +179,7 @@ class VoiceService:
         session_id: str = "default-session",
         auto_start: bool = True,
         sync: bool = False,
+        user_role: Optional[str] = None,
     ) -> VoiceExecuteResponse:
         """
         Voice Execution Workflow:
@@ -199,66 +207,50 @@ class VoiceService:
                 confidence=transcription.confidence,
             )
 
-        # Retrieve conversation context and execute via VoiceAgent
-        conv = cls.get_conversation_state(session_id)
-        agent = VoiceAgent(conversation=conv)
-        agent_res: VoiceAgentResult = agent.process(transcript=transcript_text, user_id=user_id)
-
-        task_id = agent_res.task_id
-        final_status = "planning" if (auto_start and task_id and agent_res.status in ("created", "planning")) else agent_res.status
-
-        EventService.record_event(
-            task_id=task_id or "system-voice",
-            event_type="voice.agent.executed",
-            payload={
-                "intent_type": agent_res.intent_type.value if hasattr(agent_res.intent_type, "value") else str(agent_res.intent_type),
-                "status": final_status,
-                "project_created": agent_res.project_created,
-                "project_path": agent_res.project_path,
-                "provider": transcription.provider,
-            },
+        return cls.process_transcript(
+            transcript_text, user_id=user_id, session_id=session_id,
+            auto_start=auto_start, sync=sync, provider=transcription.provider,
+            confidence=transcription.confidence, user_role=user_role,
         )
 
-        # Trigger background execution if a new engineering task was created
-        if task_id and auto_start and agent_res.status in ("created", "planning", "ok"):
-            import threading
-
-            def _bg_execute():
-                try:
-                    TaskService.update_task_status(task_id, TaskStatus.PLANNING)
-                    MultiAgentService.start_task(instruction=transcript_text, sync=True)
-                    EventService.record_event(
-                        task_id=task_id,
-                        event_type="voice.task.completed",
-                        payload={"status": "COMPLETED"},
-                    )
-                except Exception as exc:
-                    TaskService.set_error(task_id, str(exc))
-                    EventService.record_event(
-                        task_id=task_id,
-                        event_type="voice.task.failed",
-                        payload={"error": str(exc)},
-                    )
-
-            if sync:
-                _bg_execute()
-            else:
-                thread = threading.Thread(
-                    target=_bg_execute,
-                    daemon=True,
-                    name=f"voice-exec-{task_id[:8]}",
-                )
-                thread.start()
-
+    @classmethod
+    def process_transcript(cls, transcript: str, user_id: Optional[str] = None,
+                           session_id: str = "default-session", auto_start: bool = True,
+                           sync: bool = False, provider: str = "text",
+                           confidence: Optional[float] = 1.0, user_role: Optional[str] = None) -> VoiceExecuteResponse:
+        # Uncertain recognition must not consume a pending confirmation or name.
+        if confidence is not None and confidence < 0.65:
+            return VoiceExecuteResponse(
+                status="needs_clarification", transcript=transcript,
+                tts_summary="I couldn't hear that clearly. Please repeat your instruction.",
+                provider=provider, confidence=confidence,
+            )
+        # Serialize short conversational turns so a confirmation cannot consume
+        # another request's pending intent. Engineering work runs outside this lock.
+        with cls._conversation_lock:
+            conv = cls.get_conversation_state(session_id, user_id)
+            agent = VoiceAgent(conversation=conv)
+            result = agent.process(transcript=transcript, user_id=user_id, user_role=user_role)
+        task_id = result.task_id
+        if task_id and auto_start and result.status in ("created", "planning"):
+            task = TaskService.get_task(task_id)
+            if task is None:
+                raise ValueError("Voice task was not persisted")
+            TaskService.update_task_status(task_id, TaskStatus.PLANNING)
+            MultiAgentService.start_task(instruction=task.user_request, task_id=task_id, sync=sync)
+            task = TaskService.get_task(task_id)
+            result.status = task.status.value.lower()
+            if sync and task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                result.tts_summary = task.final_response or task.error or result.tts_summary
+        EventService.record_event(
+            task_id=task_id or "system-voice", event_type="voice.agent.executed",
+            payload={"intent_type": result.intent_type.value, "status": result.status,
+                     "project_created": result.project_created, "provider": provider},
+        )
         return VoiceExecuteResponse(
-            status=final_status,
-            transcript=transcript_text,
-            task_id=agent_res.task_id,
-            project_created=agent_res.project_created,
-            project_path=agent_res.project_path,
-            tts_summary=agent_res.tts_summary,
-            provider=transcription.provider,
-            confidence=transcription.confidence,
+            status=result.status, transcript=transcript, task_id=task_id,
+            project_created=result.project_created, project_path=result.project_path,
+            tts_summary=result.tts_summary, provider=provider, confidence=confidence,
         )
 
     @classmethod
@@ -271,9 +263,10 @@ class VoiceService:
     def get_status(cls) -> VoiceProviderStatus:
         """Get voice runtime status without exposing secrets."""
         key = settings.ASSEMBLYAI_API_KEY.strip()
-        provider = cls.get_stt_provider()
+        preferred = (settings.VOICE_PROVIDER or "assemblyai").lower()
+        provider_name = "MockSpeechToTextProvider" if preferred == "mock" else "AssemblyAIProvider"
         return VoiceProviderStatus(
-            stt_provider=provider.__class__.__name__,
+            stt_provider=provider_name,
             has_api_key=bool(key),
             tts_provider=settings.VOICE_TTS_PROVIDER,
             max_audio_size_mb=round(settings.VOICE_MAX_AUDIO_SIZE_BYTES / (1024 * 1024), 1),

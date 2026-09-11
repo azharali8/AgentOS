@@ -33,8 +33,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
     { id: 'repository', label: 'Repository', icon: GitBranch },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
-    { id: 'agents', label: 'Agents', icon: Bot },
-    { id: 'artifacts', label: 'Artifacts', icon: Box },
+    { id: 'artifacts', label: 'Approvals', icon: Box },
     { id: 'activity', label: 'Activity', icon: Activity },
   ];
 
@@ -46,7 +45,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside
       className={`${
-        isCollapsed ? 'w-18' : 'w-56'
+        isCollapsed ? 'w-[4.5rem]' : 'w-56'
       } bg-white border-r border-slate-200/90 flex flex-col h-screen select-none transition-all duration-200 relative z-20 shrink-0`}
     >
       {/* Brand Header */}

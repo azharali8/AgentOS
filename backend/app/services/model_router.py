@@ -128,11 +128,15 @@ class ModelRouter:
             if provider == "ollama":
                 res = httpx.get(f"{settings.OLLAMA_BASE_URL}/api/tags", timeout=2.0)
                 latency = (time.perf_counter() - start_t) * 1000.0
-                status = ModelStatus.READY if res.status_code == 200 else ModelStatus.DEGRADED
+                res.raise_for_status()
+                names = {m.get("name") for m in res.json().get("models", [])}
+                installed = model in names or (":" not in model and model + ":latest" in names)
+                status = ModelStatus.READY if installed else ModelStatus.UNAVAILABLE
                 return ModelHealth(
                     provider=provider,
                     model=model,
                     status=status,
+                    error=None if installed else f"Model '{model}' is not installed. Set OLLAMA_MODEL to a name from ollama list.",
                     latency_ms=latency,
                     task_capabilities=["CODING", "REASONING", "DEBUGGING", "CLASSIFICATION"],
                 )
@@ -175,13 +179,6 @@ class ModelRouter:
                     "status": health.status.value,
                     "endpoint": settings.OLLAMA_BASE_URL if health.provider == "ollama" else "local",
                     "available_local_tags": [health.model] if health.status == ModelStatus.READY else [],
-                },
-                {
-                    "name": "claude-3-5-sonnet",
-                    "provider": "anthropic",
-                    "tier": "CLOUD",
-                    "status": "CONFIGURED",
-                    "endpoint": "https://api.anthropic.com",
                 }
             ],
             "task_routing_matrix": {

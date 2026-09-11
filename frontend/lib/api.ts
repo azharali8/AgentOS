@@ -259,12 +259,14 @@ export class AgentOSClient {
   async executeVoiceCommand(
     audioBlob: Blob,
     autoStart: boolean = true,
-    sync: boolean = false
+    sync: boolean = false,
+    sessionId: string = "default-session"
   ): Promise<any> {
     const formData = new FormData();
     formData.append('file', audioBlob, 'command.webm');
     formData.append('auto_start', String(autoStart));
     formData.append('sync', String(sync));
+    formData.append('session_id', sessionId);
 
     const headers: Record<string, string> = {};
     if (this.apiKey) {

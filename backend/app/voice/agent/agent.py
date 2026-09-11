@@ -51,8 +51,10 @@ class VoiceAgent:
         self,
         transcript: str,
         user_id: Optional[str] = None,
+        user_role: Optional[str] = None,
     ) -> VoiceAgentResult:
         """Process a voice transcript end-to-end."""
+        self.user_role = user_role
         transcript = transcript.strip()
         if not transcript:
             return VoiceAgentResult(
@@ -76,7 +78,7 @@ class VoiceAgent:
         if intent.requires_confirmation or self.confirmation_gate.requires_confirmation(transcript):
             self.conversation.set_pending_question(
                 question=f"Are you sure you want to proceed with: {transcript[:60]}?",
-                context={"intent": intent},
+                context={"intent": intent, "kind": "confirmation"},
             )
             self.conversation.add_agent_turn("Please confirm before I proceed.")
             return VoiceAgentResult(
@@ -92,7 +94,8 @@ class VoiceAgent:
 
     def _classify_intent(self, transcript: str) -> VoiceIntent:
         """Classify transcript into a structured VoiceIntent."""
-        lower = transcript.lower()
+        lower = re.sub(r"\bfast\s+api\b", "fastapi", transcript.lower())
+        lower = re.sub(r"\bagent\s+os\b", "agentos", lower)
 
         # --- CREATE PROJECT ---
         create_project_triggers = [
@@ -263,12 +266,16 @@ class VoiceAgent:
                     project_path=result.get("path"),
                 )
             except Exception as exc:
-                logger.warning("CREATE_PROJECT failed: %s; falling back to task", exc)
-                return self._fallback_task(intent, user_id)
+                logger.warning("CREATE_PROJECT failed: %s", exc)
+                return VoiceAgentResult(
+                    tts_summary=f"I couldn't create the project: {exc}. Please choose another name or location.",
+                    intent_type=intent.intent_type, status="failed",
+                )
 
         elif intent.intent_type == IntentType.RUN_TESTS:
             res = self.gateway.run_tests()
-            tts = res.get("tts_message", "Tests completed.")
+            self.conversation.active_task_id = res.get("task_id")
+            tts = res.get("tts_message", "Tests submitted.")
             self.conversation.add_agent_turn(tts)
             return VoiceAgentResult(
                 tts_summary=tts,
@@ -279,6 +286,7 @@ class VoiceAgent:
 
         elif intent.intent_type == IntentType.INVESTIGATE_FAILURE:
             res = self.gateway.investigate_failure(intent.task_id or self.conversation.active_task_id)
+            self.conversation.active_task_id = res.get("task_id")
             tts = res.get("tts_message", "Diagnosing failure.")
             self.conversation.add_agent_turn(tts)
             return VoiceAgentResult(
@@ -290,6 +298,7 @@ class VoiceAgent:
 
         elif intent.intent_type == IntentType.REVIEW_CHANGES:
             res = self.gateway.review_changes()
+            self.conversation.active_task_id = res.get("task_id")
             tts = res.get("tts_message", "Reviewing changes.")
             self.conversation.add_agent_turn(tts)
             return VoiceAgentResult(
@@ -332,7 +341,7 @@ class VoiceAgent:
             )
 
         elif intent.intent_type == IntentType.APPROVE_ACTION:
-            res = self.gateway.resolve_approval(intent.approval_id or "", approved=True)
+            res = self.gateway.resolve_approval(intent.approval_id or "", approved=True, user_id=user_id, user_role=getattr(self, "user_role", None))
             tts = res.get("tts_message", "Action approved.")
             self.conversation.add_agent_turn(tts)
             return VoiceAgentResult(
@@ -342,7 +351,7 @@ class VoiceAgent:
             )
 
         elif intent.intent_type == IntentType.REJECT_ACTION:
-            res = self.gateway.resolve_approval(intent.approval_id or "", approved=False)
+            res = self.gateway.resolve_approval(intent.approval_id or "", approved=False, user_id=user_id, user_role=getattr(self, "user_role", None))
             tts = res.get("tts_message", "Action rejected.")
             self.conversation.add_agent_turn(tts)
             return VoiceAgentResult(
@@ -382,11 +391,17 @@ class VoiceAgent:
         question, context = self.conversation.consume_pending_question()
         pending_intent: Optional[VoiceIntent] = context.get("intent")
 
-        if self.confirmation_gate.is_confirmed(reply):
-            if pending_intent:
+        self.conversation.add_user_turn(reply)
+        if context.get("kind") == "confirmation":
+            if self.confirmation_gate.is_rejected(reply):
+                return VoiceAgentResult(tts_summary="Operation cancelled.", status="cancelled")
+            if self.confirmation_gate.is_confirmed(reply) and pending_intent:
                 pending_intent.requires_confirmation = False
                 return self._route_and_respond(pending_intent, user_id)
-            return VoiceAgentResult(tts_summary="Confirmed. Proceeding with operation.", status="ok")
+            self.conversation.set_pending_question(question or "Please confirm or cancel.", context)
+            return VoiceAgentResult(tts_summary="Please say confirm to proceed or cancel to abort.",
+                                    status="awaiting_confirmation", requires_confirmation=True,
+                                    needs_clarification=True)
 
         if self.confirmation_gate.is_rejected(reply):
             return VoiceAgentResult(tts_summary="Operation cancelled.", status="cancelled")
@@ -403,7 +418,7 @@ class VoiceAgent:
     @staticmethod
     def _extract_project_name(transcript: str) -> Optional[str]:
         """Extract project name from transcript phrases."""
-        lower = transcript.lower().strip()
+        lower = re.sub(r"^agent\s*os[,\s:]*", "", transcript.lower().strip()).rstrip(".!? ")
 
         # If it's a bare generic command like "create a new project" or "create a project"
         if lower in ("create a new project", "create new project", "create a project", "create project", "scaffold a project", "scaffold project"):

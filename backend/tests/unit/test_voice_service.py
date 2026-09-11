@@ -226,6 +226,7 @@ async def test_execute_voice_command_launches_task(mock_audio_bytes):
     assert task.user_request == "Build a REST API endpoint for health check."
     mock_start.assert_called_once_with(
         instruction="Build a REST API endpoint for health check.",
+        task_id=response.task_id,
         sync=True,
     )
 

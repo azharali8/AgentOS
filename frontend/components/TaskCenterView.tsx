@@ -195,7 +195,6 @@ export const TaskCenterView: React.FC<TaskCenterViewProps> = ({
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [instruction, setInstruction] = useState('');
   const [priority, setPriority] = useState(1);
-  const [requestedAgent, setRequestedAgent] = useState('');
   const [executionMode, setExecutionMode] = useState('autonomous');
   const [branch, setBranch] = useState('main');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
@@ -208,7 +207,6 @@ export const TaskCenterView: React.FC<TaskCenterViewProps> = ({
     setIsSubmitting(true);
     try {
       await onCreateTask(instruction.trim(), priority, {
-        requested_agent: requestedAgent || undefined,
         execution_mode: executionMode,
       });
       setInstruction('');
@@ -401,24 +399,6 @@ export const TaskCenterView: React.FC<TaskCenterViewProps> = ({
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                    Target Domain Expert
-                  </label>
-                  <select
-                    value={requestedAgent}
-                    onChange={(e) => setRequestedAgent(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
-                  >
-                    <option value="">Supervisor (Auto-Decompose)</option>
-                    {agents.map((ag) => (
-                      <option key={ag.name} value={ag.agent_type}>
-                        {ag.name} ({ag.risk_level})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
                     Priority Level

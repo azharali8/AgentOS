@@ -49,7 +49,10 @@ from backend.app.services.workspace_service import WorkspaceService
 
 
 @pytest.fixture(autouse=True)
-def setup_workspace():
+def setup_workspace(monkeypatch):
+    # Patch generation now calls the model. This offline contract suite must
+    # explicitly select its deterministic provider rather than use local Ollama.
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "mock")
     workspace_root = Path(settings.WORKSPACE_ROOT)
     workspace_root.mkdir(parents=True, exist_ok=True)
     calc_path = workspace_root / "calculator.py"

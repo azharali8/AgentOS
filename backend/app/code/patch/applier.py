@@ -115,6 +115,8 @@ class PatchApplier:
                     error=f"Path validation failed for {pf.relative_path}: {exc}",
                 )
 
+            if pf.is_new_file and resolved.exists():
+                return ApplyResult(success=False, error=f"New file already exists: {pf.relative_path}")
             if not pf.is_new_file:
                 if not resolved.exists():
                     return ApplyResult(

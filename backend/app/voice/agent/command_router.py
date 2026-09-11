@@ -192,57 +192,16 @@ class AgentOSCommandGateway:
     @staticmethod
     def run_tests() -> Dict[str, Any]:
         """Run the test suite on the current workspace via TestService and return summary."""
-        instruction = "Run the full test suite and report the results."
-        task_req = TaskRequest(instruction=instruction)
-        task_record = TaskService.create_task(request=task_req)
-        task_id = task_record.task_id
-
-        try:
-            from backend.app.services.test_service import TestService
-            framework, target = TestService.discover_test_framework()
-            test_res = TestService.run_tests(framework=framework, path=target)
-
-            if test_res.get("success"):
-                data = test_res.get("data") or {}
-                passed = data.get("passed", 0)
-                failed = data.get("failed", 0)
-                duration = data.get("duration", 0.0)
-
-                if failed > 0:
-                    tts_msg = f"Test suite finished with {failed} failures and {passed} passed in {duration:.2f} seconds."
-                else:
-                    tts_msg = f"All {passed} tests passed successfully in {duration:.2f} seconds."
-
-                TaskService.update_task_status(task_id, TaskStatus.COMPLETED)
-                TaskService.set_final_response(task_id, tts_msg)
-
-                return {
-                    "task_id": task_id,
-                    "status": "ok",
-                    "data": data,
-                    "tts_message": tts_msg,
-                }
-            else:
-                err = test_res.get("error", "Unknown test failure")
-                TaskService.set_error(task_id, str(err))
-                return {
-                    "task_id": task_id,
-                    "status": "error",
-                    "error": err,
-                    "tts_message": f"Test execution encountered an error: {str(err)[:100]}",
-                }
-        except Exception as exc:
-            logger.warning("run_tests error: %s", exc)
-            return {
-                "task_id": task_id,
-                "status": "created",
-                "tts_message": "Running the test suite on the current workspace.",
-            }
+        return AgentOSCommandGateway.create_task("Run the full test suite and report the results.")
 
     @staticmethod
     def investigate_failure(task_id: Optional[str] = None) -> Dict[str, Any]:
         """Investigate test or task failure and generate actionable voice feedback."""
         instruction = "Diagnose the most recent test failures and provide a fix recommendation."
+        if task_id:
+            prior = TaskService.get_task(task_id)
+            if prior:
+                instruction += f" Referenced task {task_id}: {prior.error or prior.final_response or prior.user_request}"
         task_req = TaskRequest(instruction=instruction)
         task_record = TaskService.create_task(request=task_req)
         return {
@@ -296,21 +255,29 @@ class AgentOSCommandGateway:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def resolve_approval(approval_id: str, approved: bool, reason: str = "Voice command") -> Dict[str, Any]:
+    def resolve_approval(approval_id: str, approved: bool, reason: str = "Voice command", user_id: Optional[str] = None, user_role: Optional[str] = None) -> Dict[str, Any]:
         """Resolve a pending human approval request."""
+        if settings.AUTH_ENABLED and (user_role or "").upper() not in ("DEVELOPER", "ADMIN"):
+            return {"status": "denied", "tts_message": "Approval requires a developer or administrator."}
         try:
             from backend.app.security.approval import ApprovalManager
             from backend.app.models.approval import ApprovalStatus
 
+            record = ApprovalManager.get_approval(approval_id)
             status_enum = ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED
             success = ApprovalManager.resolve_approval(
                 approval_id=approval_id,
                 status=status_enum,
                 reason=reason,
-                resolved_by="voice-user",
+                resolved_by=user_id or "dev-default",
             )
             verb = "approved" if approved else "rejected"
-            if success:
+            if success and record:
+                from backend.app.services.multi_agent_service import MultiAgentService
+                from backend.app.services.audit_service import AuditService
+                AuditService.record(action="VOICE_APPROVAL_RESOLVED", status="SUCCESS", user_id=user_id,
+                                    target_entity="approval", target_id=approval_id, details={"approved": approved})
+                MultiAgentService.resume_approval(record.task_id, approved=approved)
                 return {
                     "status": "ok",
                     "approval_id": approval_id,

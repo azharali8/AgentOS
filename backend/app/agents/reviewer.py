@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Tuple, Literal
 
 from pydantic import ValidationError
 
@@ -24,6 +24,10 @@ if TYPE_CHECKING:
     from backend.app.llm.base import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
+
+
+class ReviewDecision(ReviewerOutput):
+    verdict: Literal["SUCCESS", "RETRYABLE", "FATAL"]
 
 
 # Marker used by MockLLMProvider to identify reviewer calls
@@ -72,8 +76,9 @@ def _parse_verdict(raw: str) -> Tuple[str, str]:
 class ReviewerAgent:
     """LLM-driven step reviewer with Pydantic-validated output."""
 
-    def __init__(self, llm: "BaseLLMProvider"):
+    def __init__(self, llm: "BaseLLMProvider", strict: bool = False):
         self.llm = llm
+        self.strict = strict
 
     def review(self, step: PlanStep, observation: Observation) -> Tuple[str, str]:
         """
@@ -90,11 +95,19 @@ class ReviewerAgent:
             + f"\n  data: {observation.data}"
             + f"\n  error: {observation.error}"
         )
+        if self.strict:
+            prompt += ("\nVerify every requirement of the original request against the source evidence and actual tests. "
+                       "Passing tests alone do not prove missing functionality exists. If a required feature is absent "
+                       "or unsupported by evidence, return RETRYABLE and identify what is missing.")
 
         try:
-            raw = self.llm.generate(prompt)
+            from backend.app.llm.structured import generate_structured
+            raw = (generate_structured(self.llm, prompt, ReviewDecision).model_dump_json()
+                   if self.strict else self.llm.generate(prompt))
             return _parse_verdict(raw)
         except Exception as exc:
+            if self.strict:
+                return "RETRYABLE", f"Model review unavailable: {exc}"
             logger.warning("Reviewer generation/parse failed, using deterministic fallback: %s", exc)
             if observation.success:
                 return "SUCCESS", "Step succeeded according to execution evidence."

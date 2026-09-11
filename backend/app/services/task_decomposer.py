@@ -16,6 +16,7 @@ import json
 import logging
 from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Set
+from pydantic import BaseModel, Field
 
 from backend.app.config.settings import settings
 from backend.app.llm.base import BaseLLMProvider
@@ -24,48 +25,30 @@ from backend.app.models.multi_agent import AgentStatus, AgentType, SubTask
 
 logger = logging.getLogger("agentos.task_decomposer")
 
+
+class PlannedSubtask(BaseModel):
+    subtask_id: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    assigned_agent: AgentType
+    dependencies: list[str] = Field(default_factory=list)
+    target_files: list[str] = Field(default_factory=list)
+
+
+class EngineeringPlan(BaseModel):
+    subtasks: list[PlannedSubtask] = Field(min_length=1, max_length=6)
+
 MULTI_AGENT_DECOMPOSE_PROMPT = """MULTI_AGENT_DECOMPOSE_PROMPT:
-You are an expert Supervisor Agent for AgentOS.
-Decompose the following user request into a minimal, focused Directed Acyclic Graph (DAG) of subtasks.
-
-Available Agent Types:
-- "research": Code search, AST symbol extraction, file reading, repository scanning, Git inspection.
-- "coding": Code modification, patch formulation, validation, and approved patch application.
-- "testing": Identifies, creates, runs test suites, and analyzes failures/coverage.
-- "debugger": Diagnoses test failures, identifies root causes, and validates bug fixes.
-- "reviewer": Result verification, consistency checks, code review, safety assessment.
-- "documentation": Markdown report writing, documentation summary, guide generation.
-- "security": Risk analysis, sensitive file policy verification, dependency checks.
-- "cybersecurity": Deep security posture analysis, vulnerability scanning, and threat modeling (ADMIN ONLY).
-- "data_engineer": Profiles, cleans, analyzes datasets (CSV, JSON, Excel, Parquet) and generates EDA reports.
-- "devops": Creates CI/CD pipelines, Docker configurations, and automates builds/deployments.
-
-Rules:
-1. Return valid JSON only with the schema below.
-2. "dependencies" must reference prior subtask_ids in the list.
-3. No circular dependencies.
-4. Keep subtask count between 1 and 6.
-
-Schema:
-{
-    "subtasks": [
-        {
-            "subtask_id": "subtask_1",
-            "description": "Inspect repository structure and discover test framework",
-            "assigned_agent": "research",
-            "dependencies": [],
-            "target_files": ["calculator.py"]
-        },
-        {
-            "subtask_id": "subtask_2",
-            "description": "Run tests and diagnose failures",
-            "assigned_agent": "debugger",
-            "dependencies": ["subtask_1"],
-            "target_files": ["calculator.py"]
-        }
-    ]
-}
-
+You are the Supervisor. Return a minimal engineering plan as JSON matching RESPONSE_SCHEMA.
+Each subtask needs a unique subtask_id, description, assigned_agent, dependencies and target_files.
+Dependencies reference earlier IDs only. Use 1 to 6 subtasks.
+Workers: research (inspect), coding (write implementation AND tests), testing (RUN existing tests),
+reviewer (review implementation and actual results), debugger (diagnose observed failures),
+documentation, security, data_engineer, devops, cybersecurity (admin only).
+For a NEW APPLICATION, use a cohesive coding step -> testing -> reviewer, in that dependency order.
+Include ALL user requirements in the coding description. Do not invent a pre-existing bug.
+Do not schedule debugger speculatively: the runtime automatically diagnoses failed tests and replans fixes.
+Testing does not write files. Only coding creates files. Avoid unnecessary scaffolding or duplicate modules.
+Return JSON only, no markdown or commentary.
 User instruction:
 """
 
@@ -78,23 +61,23 @@ class TaskDecomposer:
 
     def decompose(self, instruction: str, task_id: str = "task-1") -> List[SubTask]:
         """Decompose instruction into validated SubTasks with cycle checks."""
+        # Narrow operational requests have an unambiguous worker; never let a
+        # generic fallback turn 'run tests' into an unsolicited coding task.
+        import re
+        if re.match(r"^(run|execute) (the |full )*(tests|test suite)\b", instruction.strip(), re.I):
+            return [SubTask(task_id=task_id, subtask_id="run-tests", description=instruction,
+                            assigned_agent=AgentType.TESTING)]
+        if instruction.startswith("Diagnose the most recent test failures and provide a fix recommendation."):
+            return [SubTask(task_id=task_id, subtask_id="diagnose", description=instruction,
+                            assigned_agent=AgentType.DEBUGGER)]
         prompt = f"{MULTI_AGENT_DECOMPOSE_PROMPT}\n{instruction.strip()}"
         try:
-            raw = self.llm.generate(prompt)
-            text = raw.strip()
-            if text.startswith("```"):
-                lines = text.splitlines()
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                text = "\n".join(lines).strip()
-
-            parsed = json.loads(text)
+            from backend.app.llm.structured import generate_structured
+            parsed = generate_structured(self.llm, prompt, EngineeringPlan).model_dump(mode="json")
             subtasks_raw = parsed.get("subtasks", [])
             subtasks = self._parse_and_validate(subtasks_raw, task_id, instruction)
             return subtasks
-        except Exception as exc:
+        except ValueError as exc:
             logger.warning("LLM task decomposition fallback: %s", exc)
             return self._heuristic_fallback(instruction, task_id)
 
@@ -249,6 +232,15 @@ class TaskDecomposer:
             target_files = intelligence.get_first_workspace_files(max_files=2)
 
         inst = instruction.lower()
+        if any(word in inst for word in ("create", "build", "implement")):
+            return [
+                SubTask(task_id=task_id, subtask_id="build", description=instruction + " Include executable tests.",
+                        assigned_agent=AgentType.CODING, target_files=target_files),
+                SubTask(task_id=task_id, subtask_id="test", description="Run the generated test suite",
+                        assigned_agent=AgentType.TESTING, dependencies=["build"]),
+                SubTask(task_id=task_id, subtask_id="review", description="Review the implementation and actual test evidence against the user request",
+                        assigned_agent=AgentType.REVIEWER, dependencies=["test"]),
+            ]
         if "test" in inst or "bug" in inst or "fix" in inst:
             return [
                 SubTask(
@@ -326,4 +318,3 @@ class TaskDecomposer:
                     dependencies=["subtask_1"],
                 ),
             ]
-

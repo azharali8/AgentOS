@@ -31,6 +31,15 @@ _startup_time = time.time()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # --- Database initialization ---
+    # Must happen before any service that touches the DB (e.g. RecoveryService).
+    from backend.app.db.database import init_db
+    try:
+        init_db()
+    except Exception as exc:
+        logger.error("Database initialization failed on startup: %s", exc)
+        raise
+
     # Startup recovery
     try:
         summary = RecoveryService.recover_tasks_on_startup()

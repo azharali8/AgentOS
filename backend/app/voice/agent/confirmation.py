@@ -88,11 +88,11 @@ class ConfirmationGate:
     @staticmethod
     def is_confirmed(user_reply: str) -> bool:
         """Return True if the user's reply is a recognized confirmation phrase."""
-        lower = user_reply.strip().lower()
-        return any(lower.startswith(phrase) or lower == phrase for phrase in _CONFIRMATION_PHRASES)
+        lower = user_reply.strip().lower().rstrip(".!?")
+        return lower in _CONFIRMATION_PHRASES
 
     @staticmethod
     def is_rejected(user_reply: str) -> bool:
         """Return True if the user explicitly rejected the operation."""
-        lower = user_reply.strip().lower()
-        return any(lower.startswith(p) or lower == p for p in _REJECTION_PHRASES)
+        lower = user_reply.strip().lower().rstrip(".!?")
+        return lower in _REJECTION_PHRASES

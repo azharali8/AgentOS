@@ -53,7 +53,7 @@ agentos_backup_*.db
 agentos_backup_*.sha256
 
 # AgentOS Workspace & Runtime Artifacts
-workspace/
+/workspace/
 artifacts/
 tmp/
 .cache/

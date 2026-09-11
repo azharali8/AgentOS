@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from sqlalchemy.engine import make_url
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -8,7 +10,12 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     LLM_PROVIDER: str = "ollama"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "llama3"
+    OLLAMA_MODEL: str = "qwen2.5-coder:3b"
+    LLM_TIMEOUT_SECONDS: int = 600
+    LLM_STRUCTURED_ATTEMPTS: int = 2
+    OLLAMA_NUM_CTX: int = 8192
+    OLLAMA_NUM_PREDICT: int = 4096
+    OLLAMA_REASONING_EFFORT: str | None = None
     WORKSPACE_ROOT: str = str(PROJECT_ROOT / "workspace")
     REQUIRE_APPROVAL_FOR_DANGEROUS_ACTIONS: bool = True
     MAX_RETRIES: int = 3
@@ -17,6 +24,17 @@ class Settings(BaseSettings):
 
     # Phase 2 Database & Limits
     DATABASE_URL: str = "sqlite:///./data/agentos.db"
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def resolve_sqlite_url(cls, value: str) -> str:
+        url = make_url(value)
+        if url.get_backend_name() == "sqlite" and url.database not in (None, "", ":memory:") and not url.query.get("uri"):
+            path = Path(url.database)
+            if not path.is_absolute():
+                path = PROJECT_ROOT / path
+            return url.set(database=path.resolve().as_posix()).render_as_string(hide_password=False)
+        return value
     MAX_TASK_DURATION: int = 3600  # Default 1 hour
 
     # Phase 1 agent execution limits — controlled by server config, never by LLM
@@ -114,4 +132,3 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
-

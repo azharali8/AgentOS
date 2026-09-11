@@ -99,11 +99,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <div className="flex flex-col sm:flex-row items-center justify-between pt-2 gap-3 border-t border-slate-100">
           {/* Voice Input Integration */}
-          <VoiceControl
-            client={client}
-            onTranscriptReady={(text) => setInstruction(text)}
-            onTaskCreated={(taskId) => onSelectTask(taskId)}
-          />
+          <span className="text-xs text-slate-500">Speak using Voice above, or type an instruction for the Supervisor.</span>
 
           <div className="flex items-center space-x-2.5">
             <button

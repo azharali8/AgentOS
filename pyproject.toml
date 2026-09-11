@@ -11,6 +11,4 @@ testpaths = ["backend/tests"]
 pythonpath = ["."]
 asyncio_mode = "strict"
 tmp_path_retention_policy = "failed"
-addopts = "--basetemp=tmp/pytest-shared-run"
-
 

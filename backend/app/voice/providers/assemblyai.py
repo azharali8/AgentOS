@@ -64,6 +64,17 @@ class AssemblyAIProvider(SpeechToTextProvider):
         }
 
     async def transcribe(
+        self, audio_bytes: bytes, mime_type: str = "audio/webm",
+        language_code: Optional[str] = "en",
+    ) -> TranscriptionResult:
+        try:
+            return await asyncio.wait_for(
+                self._transcribe(audio_bytes, mime_type, language_code), timeout=self._timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise AssemblyAITranscriptionError("Speech recognition timed out. Please try again.") from exc
+
+    async def _transcribe(
         self,
         audio_bytes: bytes,
         mime_type: str = "audio/webm",
@@ -146,6 +157,10 @@ class AssemblyAIProvider(SpeechToTextProvider):
                     logger.warning("Polling retry %d encountered error: %s", attempt, exc)
                     continue
 
+                if poll_res.status_code in (401, 403):
+                    raise AssemblyAIAuthError("Invalid or unauthorized AssemblyAI API key.")
+                if poll_res.status_code == 429:
+                    raise AssemblyAIRateLimitError("AssemblyAI rate limit or credit quota exceeded.")
                 if poll_res.status_code != 200:
                     continue
 

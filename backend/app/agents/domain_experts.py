@@ -55,10 +55,13 @@ class TestingAgent:
             )
 
         start_time = time.perf_counter()
-        target_path = subtask.target_files[0] if subtask.target_files else None
+        from backend.app.services.test_service import TestService
+        framework, _ = TestService.discover_test_framework()
+        # Source files in a plan are context, not necessarily test targets.
+        target_path = next((p for p in subtask.target_files if Path(p).name.startswith("test_") or Path(p).name.endswith("_test.py")), None)
 
         try:
-            req_args: Dict[str, Any] = {"operation": "run", "framework": "pytest"}
+            req_args: Dict[str, Any] = {"operation": "run", "framework": framework}
             if target_path:
                 req_args["path"] = target_path
 
@@ -69,12 +72,12 @@ class TestingAgent:
             res_data = tool_res.data if tool_res.success and isinstance(tool_res.data, dict) else {}
             passed = res_data.get("passed", tool_res.success)
             counts = res_data.get("counts", {})
-            passed_c = counts.get("passed") or (1 if passed else 0)
-            failed_c = counts.get("failed") or (0 if passed else 1)
+            passed_c = counts.get("passed") or 0
+            failed_c = (counts.get("failed") or 0) + (counts.get("errors") or 0)
 
             report = TestExecutionReport(
-                command=f"pytest {target_path or ''}".strip(),
-                framework="pytest",
+                command=f"{framework} {target_path or ''}".strip(),
+                framework=framework,
                 exit_code=res_data.get("exit_code", 0 if passed else 1),
                 duration_seconds=duration,
                 total_tests=passed_c + failed_c,

@@ -1,12 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Sidebar } from '../components/Sidebar';
 import { LoginView } from '../components/auth/LoginView';
 import { DashboardView } from '../components/DashboardView';
 import { TaskCenterView } from '../components/TaskCenterView';
 import { TaskExecutionView } from '../components/TaskExecutionView';
-import { AgentCenterView } from '../components/AgentCenterView';
 import { EvaluationCenterView } from '../components/EvaluationCenterView';
 import { WorkspaceView } from '../components/workspace/WorkspaceView';
 import { ApprovalCenterView } from '../components/approvals/ApprovalCenterView';
@@ -53,9 +52,9 @@ export default function Home() {
     }
   }, []);
 
-  const client = new AgentOSClient(token || undefined);
+  const client = useMemo(() => new AgentOSClient(token || undefined), [token]);
 
-  const { events: streamEvents, isConnected: isStreaming } = useTaskEventStream(selectedTaskId);
+  const { events: streamEvents, isConnected: isStreaming } = useTaskEventStream(selectedTaskId, token);
 
   const loadData = async () => {
     if (!token) return;
@@ -175,27 +174,6 @@ export default function Home() {
 
           {/* Global Search & System Status */}
           <div className="flex items-center space-x-3">
-            {/* Search Input with ⌘K */}
-            <div className="relative hidden md:flex items-center">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3" />
-              <input
-                type="text"
-                placeholder="Search files, tasks..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-56 bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-9 py-1 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500/30"
-              />
-              <span className="absolute right-2.5 text-[10px] text-slate-400 font-mono">⌘K</span>
-            </div>
-
-            {/* Active agents pill — real count from backend */}
-            {agents.length > 0 && (
-              <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-indigo-50/80 border border-indigo-100 text-indigo-700 rounded-xl text-xs font-semibold">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
-                <span>{agents.length} agent{agents.length !== 1 ? 's' : ''} available</span>
-              </div>
-            )}
-
             {/* Current View Pill */}
             <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-xl text-xs font-medium capitalize">
               {activeTab === 'execution' ? 'Tasks' : activeTab}
@@ -204,6 +182,7 @@ export default function Home() {
             {/* Compact Header Voice Input */}
             <VoiceControl
               client={client}
+              key={token}
               compact={true}
               onTaskCreated={(taskId) => {
                 setSelectedTaskId(taskId);
@@ -216,7 +195,7 @@ export default function Home() {
             <button
               onClick={() => setActiveTab('artifacts')}
               className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-colors"
-              title="Notifications"
+              title="Approvals" aria-label="Open approvals"
             >
               <Bell className="w-4 h-4" />
             </button>
@@ -298,15 +277,6 @@ export default function Home() {
                 </button>
               </div>
             )
-          )}
-
-          {activeTab === 'agents' && (
-            <AgentCenterView
-              agents={agents}
-              tasks={tasks}
-              userRole={userRole}
-              onInvokeAgent={handleInvokeAgent}
-            />
           )}
 
           {activeTab === 'artifacts' && (

@@ -48,7 +48,6 @@ COPY --from=python-builder /install /usr/local
 
 # Copy backend source
 COPY --chown=agentos:agentos backend/ ./backend/
-COPY --chown=agentos:agentos alembic/ ./alembic/
 COPY --chown=agentos:agentos alembic.ini ./
 
 # Copy built frontend assets

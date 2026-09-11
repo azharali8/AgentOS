@@ -165,9 +165,14 @@ class WorkerRuntime:
 
             # 2. Execute multi-agent graph with lease/worker context
             try:
-                MultiAgentService.start_task(instruction=instruction, sync=True)
-                TaskService.update_task_status(task_id, TaskStatus.COMPLETED)
-                TaskQueue.update_status(task_id, QueueStatus.COMPLETED)
+                result = MultiAgentService.start_task(instruction=instruction, sync=True, task_id=task_id)
+                queue_status = {
+                    TaskStatus.COMPLETED: QueueStatus.COMPLETED,
+                    TaskStatus.CANCELLED: QueueStatus.CANCELLED,
+                    TaskStatus.WAITING_APPROVAL: QueueStatus.PAUSED,
+                    TaskStatus.PAUSED: QueueStatus.PAUSED,
+                }.get(result.status, QueueStatus.FAILED)
+                TaskQueue.update_status(task_id, queue_status)
             except Exception as exc:
                 TaskService.set_error(task_id, str(exc))
                 TaskQueue.update_status(task_id, QueueStatus.FAILED)

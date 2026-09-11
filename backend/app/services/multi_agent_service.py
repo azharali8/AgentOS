@@ -31,10 +31,12 @@ class MultiAgentService:
     """Entry point for multi-agent task execution and resumption."""
 
     @staticmethod
-    def start_task(instruction: str, idempotency_key: Optional[str] = None, sync: bool = False) -> TaskResult:
+    def start_task(instruction: str, idempotency_key: Optional[str] = None, sync: bool = False, task_id: Optional[str] = None) -> TaskResult:
         """Create task and invoke multi-agent StateGraph."""
         task_req = TaskRequest(instruction=instruction)
-        task = TaskService.create_task(task_req, idempotency_key=idempotency_key)
+        task = TaskService.get_task(task_id) if task_id else TaskService.create_task(task_req, idempotency_key=idempotency_key)
+        if task is None or task.user_request != instruction:
+            raise ValueError("Execution must reference the existing task's instruction")
         task_id = task.task_id
 
         if task.status not in (TaskStatus.PENDING, TaskStatus.PLANNING):
@@ -62,12 +64,7 @@ class MultiAgentService:
                 result_state = graph.invoke(initial_state, config=config)
                 _active_multi_agent_states[task_id] = result_state
 
-                final_status = result_state.get("status", "COMPLETED")
-                if final_status == "COMPLETED":
-                    TaskService.update_task_status(task_id, TaskStatus.COMPLETED)
-                else:
-                    TaskService.update_task_status(task_id, TaskStatus.FAILED)
-                TaskService.set_final_response(task_id, result_state.get("final_response", ""))
+                MultiAgentService._persist_outcome(task_id, result_state, graph, config)
             except GraphInterrupt as exc:
                 try:
                     snap = graph.get_state(config)
@@ -103,17 +100,29 @@ class MultiAgentService:
             )
             _active_multi_agent_states[task_id] = result_state
 
-            final_status = result_state.get("status", "COMPLETED")
-            if final_status == "COMPLETED":
-                TaskService.update_task_status(task_id, TaskStatus.COMPLETED)
-            else:
-                TaskService.update_task_status(task_id, TaskStatus.FAILED)
-            TaskService.set_final_response(task_id, result_state.get("final_response", ""))
+            MultiAgentService._persist_outcome(task_id, result_state, graph, config)
         except Exception as exc:
             logger.error("Error resuming multi-agent task %s: %s", task_id, exc, exc_info=True)
             TaskService.set_error(task_id, str(exc))
 
         return TaskService.get_task(task_id)
+
+    @staticmethod
+    def _persist_outcome(task_id, state, graph, config):
+        current = TaskService.get_task(task_id)
+        if current and current.status == TaskStatus.CANCELLED:
+            return
+        snapshot = graph.get_state(config)
+        if state.get("__interrupt__") or (snapshot and any("approval" in n for n in snapshot.next)):
+            TaskService.update_task_status(task_id, TaskStatus.WAITING_APPROVAL)
+            return
+        status = state.get("status", "FAILED")
+        if status == "COMPLETED":
+            TaskService.set_final_response(task_id, state.get("final_response", ""))
+        elif status in ("CANCELLED", "PAUSED", "WAITING_APPROVAL"):
+            TaskService.update_task_status(task_id, TaskStatus(status))
+        else:
+            TaskService.set_error(task_id, state.get("error") or state.get("final_response") or "Supervisor execution failed")
 
     @staticmethod
     def get_state(task_id: str) -> Optional[MultiAgentState]:

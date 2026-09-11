@@ -106,11 +106,14 @@ class ResultJudgeAgent:
                 text = "\n".join(lines).strip()
 
             parsed = json.loads(text)
-            return JudgeVerdict(**parsed)
+            verdict = JudgeVerdict(**parsed)
+            if verdict.verdict == JudgeVerdictType.SUCCESS:
+                raise ValueError("Model success contradicts the failing test execution evidence")
+            return verdict
         except Exception as exc:
             logger.warning("Judge LLM fallback error: %s", exc)
             return JudgeVerdict(
-                verdict=JudgeVerdictType.STILL_FAILING if failed_count > 0 else JudgeVerdictType.SUCCESS,
+                verdict=JudgeVerdictType.STILL_FAILING,
                 reasoning="Test evaluation completed via deterministic rules.",
                 confidence=0.9,
                 tests_passed=passed_count,

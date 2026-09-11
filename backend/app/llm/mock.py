@@ -107,6 +107,19 @@ class MockLLMProvider(BaseLLMProvider):
                 return json.dumps(self._default_replan)
             return json.dumps(self._default_plan)
 
+        if prompt.startswith("CODING_CHANGES_PROMPT:"):
+            context, _ = json.JSONDecoder().raw_decode(prompt.split("CONTEXT_JSON:\n", 1)[1])
+            files = []
+            for path, original in context["files"].items():
+                content = original.replace("return a - b", "return a + b")
+                if content == original:
+                    if "divide" in context["instruction"].lower():
+                        content += "\ndef divide(a, b):\n    if b == 0:\n        raise ValueError('Division by zero')\n    return a / b\n"
+                    else:
+                        content += "\n# Mock coding proposal\n"
+                files.append({"path": path, "content": content})
+            return json.dumps({"files": files})
+
         if "REVIEWER_PROMPT" in prompt:
             return json.dumps(self._default_review)
 

@@ -17,6 +17,25 @@ import {
 } from 'lucide-react';
 import { Task, TaskEvent } from '../types';
 
+const eventLabel = (event: TaskEvent): string => {
+  const labels: Record<string, string> = {
+    TASK_CREATED: 'Request received', TASK_CLASSIFIED: 'Understanding request',
+    PLAN_CREATED: 'Planning', SUBTASK_CREATED: 'Work planned', AGENT_SELECTED: 'Work delegated',
+    PARALLEL_EXECUTION_STARTED: 'Executing planned work', SUBTASK_COMPLETED: 'Work finished',
+    SUBTASK_FAILED: 'Work failed', PATCH_CREATED: 'Changes proposed', PATCH_APPLIED: 'Applying changes',
+    TEST_COMPLETED: 'Tests finished', APPROVAL_REQUIRED: 'Waiting for approval',
+    APPROVAL_RESOLVED: 'Approval resolved', TASK_COMPLETED: 'Completed', TASK_FAILED: 'Failed',
+    REPLAN_TRIGGERED: 'Investigating failure',
+  };
+  if (event.event_type === 'SUBTASK_STARTED') {
+    const stages: Record<string, string> = {RESEARCH: 'Analyzing repository', CODING: 'Implementing changes',
+      TESTING: 'Running tests', DEBUGGER: 'Investigating failure', REVIEWER: 'Reviewing changes',
+      SECURITY: 'Checking security', DOCUMENTATION: 'Preparing documentation'};
+    return stages[String(event.payload?.agent).toUpperCase()] || 'Executing delegated work';
+  }
+  return labels[event.event_type] || event.event_type.replace(/[_.]/g, ' ').toLowerCase();
+};
+
 interface TaskExecutionViewProps {
   task: Task;
   events: TaskEvent[];
@@ -33,7 +52,8 @@ export const TaskExecutionView: React.FC<TaskExecutionViewProps> = ({
   onResolveApproval,
 }) => {
   const [activeTab, setActiveTab] = useState<'execution' | 'code' | 'diff' | 'tests' | 'review'>('execution');
-  const [supervisorPrompt, setSupervisorPrompt] = useState('');
+  const approvalEvent = [...events].reverse().find(e => e.event_type === 'APPROVAL_REQUIRED');
+  const approvalId = approvalEvent?.payload?.approval_id as string | undefined;
 
   const statusColor =
     task.status === 'COMPLETED'
@@ -92,8 +112,8 @@ export const TaskExecutionView: React.FC<TaskExecutionViewProps> = ({
                 <span className="text-xs font-mono">P{task.priority || 1}</span>
               </div>
               <div>
-                <span className="text-slate-400 text-[10px] block">Assigned Agent</span>
-                <span className="text-xs font-mono text-indigo-600">{task.assigned_agent || 'Supervisor'}</span>
+                <span className="text-slate-400 text-[10px] block">Coordinated by</span>
+                <span className="text-xs font-mono text-indigo-600">Supervisor</span>
               </div>
             </div>
           </div>
@@ -121,7 +141,7 @@ export const TaskExecutionView: React.FC<TaskExecutionViewProps> = ({
           <div className="flex items-center space-x-1 bg-white p-1 rounded-xl border border-slate-200/90 shadow-2xs overflow-x-auto">
             {[
               { id: 'execution', label: 'Live Trace', badge: `${events.length} events` },
-              { id: 'diff', label: 'Diff / Changes' },
+              { id: 'diff', label: 'Result' },
               { id: 'tests', label: 'Tests' },
             ].map((tab) => {
               const isActive = activeTab === tab.id;
@@ -157,20 +177,19 @@ export const TaskExecutionView: React.FC<TaskExecutionViewProps> = ({
 
                 {events.length === 0 ? (
                   <div className="py-12 text-center text-slate-400 text-xs">
-                    {isStreaming ? 'Connecting to live event stream...' : 'No execution events recorded yet.'}
+                    {isStreaming ? 'Waiting for execution events…' : 'Event stream disconnected; reconnecting…'}
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
                     {events.map((ev, i) => (
                       <div key={ev.event_id || i} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1 text-xs">
                         <div className="flex items-center justify-between">
-                          <span className="font-bold text-indigo-700 font-mono text-[11px]">{ev.event_type}</span>
+                          <span className="font-bold text-indigo-700 text-[11px]">{eventLabel(ev)}</span>
                           <span className="text-slate-400 font-mono text-[10px]">{ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : ''}</span>
                         </div>
-                        {ev.payload && (
-                          <pre className="text-[11px] text-slate-600 font-mono bg-white p-2 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap">
-                            {JSON.stringify(ev.payload, null, 2)}
-                          </pre>
+                        {ev.event_type === 'SUBTASK_STARTED' && ev.payload?.description && <p>{String(ev.payload.description)}</p>}
+                        {(ev.payload?.agent || ev.payload?.agent_type) && (
+                          <p className="text-[10px] text-slate-500">{String(ev.payload.agent || ev.payload.agent_type)} · delegated by Supervisor</p>
                         )}
                       </div>
                     ))}
@@ -186,14 +205,17 @@ export const TaskExecutionView: React.FC<TaskExecutionViewProps> = ({
                     {task.result_summary}
                   </div>
                 ) : (
-                  'No file mutations or patch diffs generated for this task yet.'
+                  'No result recorded for this task yet.'
                 )}
               </div>
             )}
 
             {activeTab === 'tests' && (
               <div className="p-8 text-center text-slate-400 text-xs">
-                No test suite execution recorded for this task yet.
+                {events.filter(e => e.event_type === 'TEST_COMPLETED').map(e => (
+                  <p key={e.event_id}>{e.payload?.report ? `${e.payload.report.passed_count ?? 0} passed, ${e.payload.report.failed_count ?? 0} failed; exit code ${e.payload.report.exit_code ?? 'unknown'}` : 'Test execution finished; inspect the test artifact for details.'}</p>
+                ))}
+                {!events.some(e => e.event_type === 'TEST_COMPLETED') && 'No test suite execution recorded for this task yet.'}
               </div>
             )}
           </div>
@@ -211,7 +233,7 @@ export const TaskExecutionView: React.FC<TaskExecutionViewProps> = ({
               <p className="text-slate-400">[AgentOS] Task #{task.task_id.slice(0, 8)} status: {task.status}</p>
               {events.map((e, idx) => (
                 <p key={idx} className="text-slate-300">
-                  <span className="text-indigo-400">&gt;</span> [{e.event_type}] {JSON.stringify(e.payload || {})}
+                  <span className="text-indigo-400">&gt;</span> [{e.event_type}] {eventLabel(e)}
                 </p>
               ))}
             </div>
@@ -236,33 +258,13 @@ export const TaskExecutionView: React.FC<TaskExecutionViewProps> = ({
               {task.error && <p className="text-rose-600 font-mono text-[11px]">{task.error}</p>}
             </div>
 
-            {/* Prompt Input Box */}
-            <div className="relative">
-              <input
-                type="text"
-                value={supervisorPrompt}
-                onChange={(e) => setSupervisorPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && supervisorPrompt.trim()) {
-                    e.preventDefault();
-                    setSupervisorPrompt('');
-                  }
-                }}
-                placeholder="Message Supervisor... (Press Enter)"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-8 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500/30"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  if (supervisorPrompt.trim()) {
-                    setSupervisorPrompt('');
-                  }
-                }}
-                className="w-6 h-6 rounded-lg bg-indigo-600 text-white flex items-center justify-center absolute right-1.5 top-1.5 hover:bg-indigo-700"
-              >
-                <Send className="w-3 h-3" />
-              </button>
-            </div>
+            {task.result_summary && <p className="text-xs whitespace-pre-wrap">{task.result_summary}</p>}
+            {task.status === 'WAITING_APPROVAL' && approvalId && onResolveApproval && (
+              <div className="text-xs space-y-2">
+                <p>Review the proposed patch in Approvals before resolving it.</p>
+              </div>
+            )}
+            <p className="text-xs text-slate-500">Use Voice for a follow-up, or create another Supervisor task.</p>
           </div>
         </div>
       </div>

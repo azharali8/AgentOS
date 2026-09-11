@@ -66,10 +66,10 @@ class SupervisorAgent:
         # Instantiate specialized agent handlers
         self.research_agent = ResearchAgent(llm_provider=self.llm)
         self.coding_agent = CodingAgent(llm_provider=self.llm)
-        self.debugger_agent = DebuggerAgent(llm_provider=self.llm)
+        self.debugger_agent = DebuggerAgent(llm_provider=self.llm, strict=True)
         self.documentation_agent = DocumentationAgent(llm_provider=self.llm)
         self.security_agent = SecurityAgent(llm_provider=self.llm)
-        self.reviewer_agent = ReviewerAgent(self.llm)
+        self.reviewer_agent = ReviewerAgent(self.llm, strict=True)
         self.testing_agent = TestingAgent(llm_provider=self.llm)
         self.data_engineer_agent = DataEngineerAgent(llm_provider=self.llm)
         self.devops_agent = DevOpsAgent(llm_provider=self.llm)
@@ -102,11 +102,52 @@ class SupervisorAgent:
         # 3. Decomposition
         rel_files = list(context_bundle.files.keys())
         subtasks = self.decomposer.decompose(instruction, task_id=task_id)
+        # A model plan cannot omit executable verification of a coding task.
+        coding_ids = [s.subtask_id for s in subtasks if s.assigned_agent == AgentType.CODING]
+        if coding_ids:
+            tests = [s for s in subtasks if s.assigned_agent == AgentType.TESTING]
+            reviews = [s for s in subtasks if s.assigned_agent == AgentType.REVIEWER]
+            used = {s.subtask_id for s in subtasks}
+            def unique_id(prefix):
+                while prefix in used:
+                    prefix += "-next"
+                used.add(prefix)
+                return prefix
+            if not tests:
+                tests = [SubTask(task_id=task_id, subtask_id=unique_id("verify-tests"),
+                                 description="Run the full test suite after applying the proposed implementation",
+                                 assigned_agent=AgentType.TESTING, dependencies=coding_ids)]
+                subtasks.extend(tests)
+                for review in reviews:
+                    review.dependencies = list(dict.fromkeys(review.dependencies + [s.subtask_id for s in tests]))
+            if not reviews:
+                reviews = [SubTask(task_id=task_id, subtask_id=unique_id("verify-review"),
+                                   description="Review the implementation and actual test evidence against the original request",
+                                   assigned_agent=AgentType.REVIEWER, dependencies=[s.subtask_id for s in tests])]
+                subtasks.extend(reviews)
+            # Validate order rather than creating cycles by rewriting model dependencies.
+            by_id = {s.subtask_id: s for s in subtasks}
+            def ancestors(s, seen=None):
+                seen = set() if seen is None else seen
+                for dep in s.dependencies:
+                    if dep not in by_id:
+                        raise ValueError(f"Unknown planned dependency: {dep}")
+                    if dep not in seen:
+                        seen.add(dep)
+                        ancestors(by_id[dep], seen)
+                return seen
+            if not any(set(coding_ids).issubset(ancestors(s)) for s in tests):
+                raise ValueError("Engineering plan must run tests after all coding changes")
+            if not any({s.subtask_id for s in tests}.issubset(ancestors(r)) for r in reviews):
+                raise ValueError("Engineering plan must review actual test results")
+            from backend.app.config.settings import settings
+            if len(subtasks) > settings.MAX_SUBTASKS:
+                raise ValueError("Verified engineering plan exceeds subtask limit")
 
         # Enhance subtasks with resolved target files if not explicitly present
         if rel_files:
             for st in subtasks:
-                if not st.target_files and st.assigned_agent in (AgentType.RESEARCH, AgentType.CODING, AgentType.TESTING):
+                if not st.target_files and st.assigned_agent in (AgentType.RESEARCH, AgentType.CODING):
                     st.target_files = rel_files
 
         # 4. Save immutable PLAN artifact
@@ -232,6 +273,10 @@ class SupervisorAgent:
         agent_type = subtask.assigned_agent
         ConcurrencyManager.acquire_agent_slot(agent_type)
         try:
+            EventService.record_event(subtask.task_id, "SUBTASK_STARTED", payload={
+                "subtask_id": subtask.subtask_id, "agent": agent_type.value,
+                "description": subtask.description, "delegated_by": "Supervisor",
+            })
             if agent_type == AgentType.RESEARCH:
                 res = self.research_agent.execute(subtask)
             elif agent_type == AgentType.CODING:
@@ -259,12 +304,25 @@ class SupervisorAgent:
                 passed = data_dict.get("passed", False) if isinstance(data_dict, dict) else False
 
                 
+                from backend.app.agents.failure_analyzer import FailureAnalyzerAgent
+                from backend.app.models.coding import InvestigationResult
+                data = data_dict or {}
+                failures = FailureAnalyzerAgent(llm_provider=self.llm).analyze(data.get("stdout", ""), data.get("stderr", ""))
+                if subtask.input_data.get("changed_files"):
+                    subtask.target_files = subtask.input_data["changed_files"]
+                investigation = InvestigationResult(
+                    affected_files=subtask.target_files or [],
+                    evidence=f"Exit code: {data.get('exit_code')}; counts: {data.get('counts')}\n"
+                             + str(data.get("stderr", ""))[:800]
+                             + "\nSource context: " + str(self.research_agent.execute(subtask).evidence)[:10000],
+                )
+                actual = self.debugger_agent.diagnose(failures, investigation)
                 diagnosis = DiagnosisReport(
                     symptoms=["Test failure detected" if not passed else "Diagnostics probe run"],
                     suspected_files=subtask.target_files or [],
-                    root_cause="Operator mismatch or syntax defect" if not passed else "No critical defects detected",
-                    suggested_fix="Apply verified patch via CodingAgent",
-                    confidence_score=0.95,
+                    root_cause=actual.root_cause,
+                    suggested_fix=actual.recommended_fix,
+                    confidence_score=actual.confidence,
                 )
                 ArtifactService.save(
                     task_id=subtask.task_id,
@@ -275,18 +333,30 @@ class SupervisorAgent:
                 res = AgentResult(
                     subtask_id=subtask.subtask_id,
                     agent_type=AgentType.DEBUGGER,
-                    status=AgentStatus.COMPLETED,
+                    status=AgentStatus.COMPLETED if test_res.get("success") else AgentStatus.FAILED,
                     summary=f"Debugger completed root cause diagnosis (root_cause='{diagnosis.root_cause}').",
                     evidence={"test_res": test_res, "diagnosis": diagnosis.model_dump()},
                 )
             elif agent_type == AgentType.REVIEWER:
-                step = PlanStep(step_id=subtask.subtask_id, tool_name="review", operation="eval", description=subtask.description)
+                review_sources = SubTask(task_id=subtask.task_id, subtask_id=subtask.subtask_id,
+                                         description=subtask.description, assigned_agent=AgentType.RESEARCH,
+                                         target_files=subtask.input_data.get("changed_files", []))
+                review_data = {**subtask.input_data, "source_evidence": self.research_agent.execute(review_sources).evidence}
+                from backend.app.config.settings import settings
+                source_chars = 0
+                for path, source in review_data["source_evidence"].items():
+                    content = "\n".join(self.coding_agent.reader.read(path, start_line=1, end_line=settings.MAX_LINES_PER_READ).lines)
+                    source_chars += len(content)
+                    if source_chars > 24000:
+                        raise ValueError("Review source budget exceeded; split the coding task")
+                    source["content"] = content
+                step = PlanStep(step_id=subtask.subtask_id, tool_name="review", operation="eval", description=subtask.description + " Original request: " + str(subtask.input_data.get("user_instruction", "")))
                 obs = Observation(
                     step_id=subtask.subtask_id,
                     tool_name="review",
                     operation="eval",
-                    success=True,
-                    data=subtask.input_data,
+                    success=all(r.get("status") != AgentStatus.FAILED.value for r in subtask.input_data.values() if isinstance(r, dict)),
+                    data=review_data,
                 )
                 verdict, reasoning = self.reviewer_agent.review(step, obs)
                 review_payload = ReviewVerdictPayload(
@@ -305,7 +375,7 @@ class SupervisorAgent:
                 res = AgentResult(
                     subtask_id=subtask.subtask_id,
                     agent_type=AgentType.REVIEWER,
-                    status=AgentStatus.COMPLETED,
+                    status=AgentStatus.COMPLETED if verdict == "SUCCESS" else AgentStatus.FAILED,
                     summary=f"Review verdict: {verdict}. {reasoning}",
                     evidence={"verdict": verdict, "reasoning": reasoning, "structured_payload": review_payload.model_dump()},
                 )

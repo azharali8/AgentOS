@@ -1,532 +1,306 @@
+<div align="center">
+
 # AgentOS
 
-AgentOS is a secure, autonomous AI software-engineering platform that orchestrates specialized agents to inspect repositories, plan tasks, generate and apply code changes, run tests, recover from failures, and operate under human approval and security boundaries.
+### Secure Autonomous AI Software Engineering Operating System
+
+**An engineering instruction becomes a coordinated, inspectable workflow.**
+
+Give AgentOS a natural-language or voice request. Its Supervisor coordinates specialized agents to inspect a repository, propose code changes, run tests, diagnose failures, and review results—with human approval before generated patches are applied.
+
+![Python](https://img.shields.io/badge/Python-3.11.14%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
+![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-1C3C3C)
+![AssemblyAI](https://img.shields.io/badge/Speech-AssemblyAI-315EFF)
+
+[Get started](#getting-started) · [Architecture](#architecture) · [Demo](#demo) · [Security](#security) · [Contribute](#contributing)
+
+</div>
 
 ---
 
-## Key Capabilities
+## Why AgentOS?
 
-- **Supervisor-Based Multi-Agent Orchestration**: Centralized task decomposition, dependency sequencing, dynamic handoffs, and lifecycle management.
-- **LangGraph Workflow Execution**: Stateful execution graphs with deterministic state transitions and checkpointing.
-- **Repository Intelligence**: AST indexing, symbol extraction, dependency graph traversal, semantic search, and file structure mapping.
-- **Bounded Context Engine**: Agent-specific context pruning, relevance scoring, token budgeting, and explicit justification tracing (`why_selected`).
-- **Task Classification & Adaptive Planning**: Automatic classification of software engineering intents (Feature, Bugfix, Refactor, Security, DevOps, Data) with dynamic replanning.
-- **Specialized Engineering Agents**: Dedicated agents for Coding, Debugging, Testing, Data Engineering, DevOps, Cybersecurity, and Architecture Review.
-- **Real Workspace Inspection & Mutation**: Sandboxed filesystem modifications, deterministic patch application, and workspace safety confinement.
-- **Cryptographically Verified Patches**: SHA-256 patch hashing, pre-application diff inspection, and atomic application.
-- **Human-in-the-Loop Approval Gates**: Policy-driven interrupt gates for high-risk operations (destructive commands, protected file modifications).
-- **Durable Task Runtime**: Non-linear state machine supporting first-class pause/resume, two-phase cancellation (`RUNNING` &rarr; `CANCELLING` &rarr; `CANCELLED`), and process restart recovery (`RECOVERY_REQUIRED`).
-- **Failure Classification & Automatic Recovery**: Categorization of Tool, Agent, Timeout, and Security failures with automatic retry and replan loops.
-- **Immutable Execution Artifacts**: SHA-256 write-time content hashing and read-time cryptographic integrity checks (`ArtifactIntegrityError`).
-- **Structured Agent Protocol**: Strongly typed agent message envelopes (`TaskAssignmentMessage`, `DiagnosisReportMessage`, `PatchProposalMessage`, `ReviewVerdictMessage`).
-- **Hierarchical Execution Tracing**: Detailed execution trees capturing tool invocations, durations, tokens, and outputs.
-- **Model Routing & Provider Health**: Task-specific model routing profiles (Coding, Reasoning, Classification) with latency measurement, fallback chains, and zero silent-mocking in production.
-- **Authentication & RBAC**: Role-Based Access Control (`ADMIN`, `DEVELOPER`, `USER`, `VIEWER`), session TTL (3600s), sliding window refresh, and logout token revocation.
-- **Rate Limiting & Brute-Force Protection**: Multi-domain sliding-window rate limiting (`auth`, `task_create`, `api`, `ws`) and 5-attempt / 15-minute account lockout.
-- **Workspace Sandbox & Boundary Defense**: Strict defenses against path traversal (`..`), URL encoding, null bytes, UNC paths, Windows drive escapes, and symlink escapes.
-- **Voice-Driven Autonomous Engineering**: Hands-free voice interface powered by AssemblyAI Speech-to-Text with bidirectional audio synthesis feedback and live workspace execution.
-- **WebSocket Event Streaming & Replay**: Real-time append-only event streaming with handshake authentication and reconnection event replay from `last_event_id`.
-- **Observability & Health Probes**: `/health` liveness and `/ready` readiness probes checking database integrity, workspace availability, and model router health.
-- **SQLite Persistence & Integrity**: SQLite storage with `@with_db_retry` exponential backoff for busy/lock handling and `PRAGMA integrity_check` validation.
-- **Disaster Recovery CLI**: CLI tool (`create`, `verify`, `restore`, `list`) with sidecar checksums and functional post-restore table query verification.
-- **Docker & Compose Deployment**: Multi-stage Docker packaging with non-root runtime (`agentos:agentos`) and persistent named volumes.
+Code suggestions are one part of software engineering. A useful change also needs repository context, a plan, executable tests, failure diagnosis, and review.
 
----
+AgentOS brings those steps into a Supervisor-driven workflow. You can inspect the proposed patch, approve or reject it, follow execution events, and see the evidence behind the result.
+
+> **Autonomy with checkpoints:** agents propose changes; AgentOS validates and executes them within configured policies; people retain control over patch approval.
+
+## Key features
+
+| Capability | What is implemented |
+| :--- | :--- |
+| **Supervisor orchestration** | Task decomposition, dependency-aware agent dispatch, and stateful LangGraph execution. |
+| **Project creation** | Create a project directory, initialize starter metadata and optional Git, select it as the workspace, and submit an engineering instruction. Existing projects can also be connected. |
+| **Repository context** | File inspection, symbol and dependency analysis, search, and bounded context selection for agent tasks. |
+| **Code generation** | Structured file proposals, schema validation, bounded regeneration, and reviewable patches. |
+| **Testing and recovery** | Execute supported test runners, report actual failures, and route failed tests through diagnosis, repair, renewed approval, and retesting. |
+| **Code review** | A Reviewer agent assesses source and execution evidence before workflow completion. |
+| **Voice control** | Browser audio capture, AssemblyAI transcription, command routing, and browser speech feedback. |
+| **Human approval** | Approve or reject generated patches through the existing task/approval flow. |
+| **Execution visibility** | Task status, WebSocket events and replay, workspace files, artifacts, and execution traces. |
+| **Security controls** | Workspace confinement, sensitive-file checks, patch integrity verification, execution limits, authentication/RBAC, and audit logging. |
+
+Implemented does not mean infallible: model output and review quality vary. See [current status](#current-status) for the verification boundary.
 
 ## Architecture
 
-The Supervisor agent and LangGraph workflow engine serve as the central orchestration authority:
+The Voice Agent handles interaction and dispatch. The **Supervisor owns engineering planning and execution**, with specialized agents operating through repository and tool services.
 
-```text
-User / API / Frontend
-       |
-       v
-Authentication & RBAC Gate (Session TTL, Logout Blacklist, Rate Limiting)
-       |
-       v
-API v1 Router (`/api/v1/tasks`)
-       |
-       v
-Task Classifier (Feature, Bugfix, Refactor, Security, DevOps, Data)
-       |
-       v
-Supervisor Agent (Orchestration & Decomposition Authority)
-       |
-       +---> Repository Intelligence & Bounded Context Engine
-       |
-       v
-Specialized Agent Execution (Coding, Debugger, Testing, DevOps, Data, Security)
-       |
-       v
-Security Policy & Approval Gate (Human-in-the-Loop for high-risk operations)
-       |
-       v
-Tool Execution (Filesystem, Git, Terminal, Code Parser)
-       |
-       v
-Workspace Modification & SHA-256 Patch Verification
-       |
-       v
-Automated Test Runner & Verification
-       |
-       v
-Reviewer Agent (Code Quality & Security Verification)
-       |
-       v
-[ Failure? ] ---> Failure Classifier ---> Recovery & Adaptive Replanning Loop
-       | (Success)
-       v
-Immutable Artifacts + Event Bus + Hierarchical Execution Trace
-       |
-       v
-Task Completion (`COMPLETED`)
+```mermaid
+flowchart TD
+    U[User] --> UI[Next.js Control Center]
+    UI -->|Text instruction| API[FastAPI services]
+    UI -->|Audio| STT[AssemblyAI transcription]
+    STT --> VOICE[Voice Agent and Command Gateway]
+    VOICE --> API
+    API --> SUP[Supervisor and task decomposition]
+    REPO[Repository intelligence and bounded context] --> SUP
+    SUP --> CODE[Coding agent: propose patch]
+    CODE --> VALIDATE[Validate schema, paths and hashes]
+    VALIDATE --> APPROVE{Human approval}
+    APPROVE -->|Approved| APPLY[Apply verified patch]
+    APPROVE -->|Rejected| STOP[Cancelled result]
+    APPLY --> TEST[Testing agent: execute tests]
+    TEST -->|Failure within retry budget| DEBUG[Debugger: diagnose failure]
+    DEBUG --> CODE
+    TEST -->|Pass| REVIEW[Reviewer agent]
+    REVIEW --> FINAL[Security review and final result]
+    FINAL --> EVENTS[Persisted task, artifacts and events]
+    STOP --> EVENTS
+    EVENTS --> UI
 ```
 
----
+This diagram follows the coding workflow. LangGraph maintains execution state and approval checkpoints; failed or exhausted steps can terminate with a failure instead of a successful result.
 
-## Security
+Explore the implementation: [workflow graph](backend/app/workflows/multi_agent_workflow.py) · [Supervisor](backend/app/agents/supervisor.py) · [patch application](backend/app/code/patch/applier.py).
 
-AgentOS enforces security controls at each boundary:
+## Voice workflow
 
-- **Authentication & Sessions**: API key and session-based authentication with 3600s sliding-window TTL, instant logout revocation, and constant-time password comparison.
-- **Role-Based Access Control (RBAC)**: Strict role boundaries (`ADMIN`, `DEVELOPER`, `USER`, `VIEWER`) guarding administrative endpoints and dangerous operations.
-- **Brute-Force Protection**: 5 consecutive failed login attempts trigger an automatic 15-minute account lockout.
-- **Multi-Domain Rate Limiting**: Independent rate limit buckets for Authentication (5/min), Task Creation (10/min), Standard API (100/min), and WebSockets (5/min).
-- **Workspace Confinement**: All file access is strictly bound to `WORKSPACE_ROOT`. Symlink escapes, path traversal (`..`), URL-encoded paths, null bytes, UNC network paths, and Windows drive escapes are rejected.
-- **Sensitive File Protection**: Immediate access denial for `.env*`, private keys (`id_rsa`, `*.pem`, `*.key`), credentials, and configuration files.
-- **Command Execution Controls**: Shell constructs (`|`, `&&`, `;`, backticks, subshells) and dangerous shell wrappers (`cmd /c`, `powershell -c`, `bash -c`) are prohibited. Executables are restricted to an allowlist.
-- **Cryptographic Patch & Artifact Integrity**: Write-time SHA-256 hashing and mandatory read-time verification. Tampered artifacts or patches raise `ArtifactIntegrityError`.
-- **Human Approval Gate**: Mutations to protected directories or destructive commands require explicit human review before execution.
-- **Audit Logging & Secret Redaction**: Append-only audit logs for security actions with automated credential redaction in logs and traces.
-- **Non-Root Container**: Production Docker containers execute under a dedicated `agentos` non-root user.
+> “AgentOS, create a FastAPI URL shortener with authentication and tests.”
 
----
+1. Open the voice control and allow microphone access on localhost or HTTPS.
+2. Browser audio is sent to AssemblyAI for transcription.
+3. The Voice Agent interprets the request and dispatches it through the Command Gateway.
+4. Project creation selects the workspace; the Supervisor plans and delegates the engineering task.
+5. Review and approve proposed patches. Tests, diagnosis, retesting, and review follow through the same engineering workflow used by text requests.
+6. Follow task events in the UI; browser speech synthesis can announce feedback.
 
-## Project Structure
+Voice requires an AssemblyAI API key and a browser with microphone capture support. Audio leaves the machine for transcription. Physical-microphone success and audible browser TTS were not verified in the latest recorded demo; real transcription of a synthetic spoken WAV was verified.
+
+## Demo
+
+**Recorded engineering result:** `gpt-oss:120b-cloud` completed the URL-shortener workflow through real AgentOS services, including approval, patch application, failed tests, debugging, retesting, and review.
+
+Independent acceptance checks found defects that the first review missed. Follow-up instructions through AgentOS corrected them: the final generated project passed **6 tests** and **7 independent API checks**. This was a guided run, not a one-shot or unattended success. The configured local `qwen2.5-coder:3b` attempt did not complete the same task.
+
+Read the [demo verification report](docs/hackathon-demo-report.md) for the exact model profile, evidence, and limitations. Its `tmp/` log and project paths refer to the verification machine; they are not bundled demo downloads.
+
+> **Screenshots and walkthrough:** no repository-hosted screenshots or demo recording are available yet. A future walkthrough should show the instruction, approval diff, test/recovery events, and final artifact together.
+
+## Tech stack
+
+| Layer | Technology |
+| :--- | :--- |
+| Backend | Python, FastAPI, Pydantic, SQLAlchemy, Uvicorn |
+| Orchestration | LangGraph with SQLite checkpoints; LangChain dependencies |
+| Model execution | Ollama adapter with structured-response validation; additional provider adapters in `backend/app/llm/` |
+| Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS, Lucide icons |
+| Voice | AssemblyAI transcription; browser MediaRecorder and SpeechSynthesis |
+| Local persistence | SQLite database, filesystem artifacts, persisted task events |
+| Verification | pytest, frontend lint/build, Node voice-endpoint tests, GitHub Actions workflow |
+| Infrastructure files | Dockerfile, Compose, PostgreSQL/Redis configuration and integration code; deployment requires additional validation |
+
+## Getting started
+
+### Prerequisites
+
+- **Python 3.11.14 or newer**, as declared in `pyproject.toml`.
+- **Node.js 20** and npm, matching the frontend CI configuration.
+- **Git** and a running **Ollama** service with the configured model available.
+- An **AssemblyAI API key** if you want voice input. Text engineering does not require it.
+
+The steps below use local SQLite and do not require Redis or PostgreSQL.
+
+### 1. Clone and install the backend
+
+```bash
+git clone https://github.com/azharali8/AgentOS.git
+cd AgentOS
+python -m venv .venv
+```
+
+Activate the environment for your shell:
+
+```bash
+# macOS / Linux
+source .venv/bin/activate
+```
+
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+```
+
+Then install the repository's dependencies:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### 2. Configure AgentOS
+
+Copy `.env.example` to `.env` in the repository root:
+
+```bash
+# macOS / Linux
+cp .env.example .env
+```
+
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
+```
+
+Edit `.env` for your machine:
+
+```dotenv
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5-coder:3b
+
+# Use an absolute path to the software project you want AgentOS to work on.
+WORKSPACE_ROOT=/absolute/path/to/your/project
+
+# Optional: required for real voice transcription.
+VOICE_PROVIDER=assemblyai
+ASSEMBLYAI_API_KEY=your_assemblyai_api_key_here
+VOICE_TTS_PROVIDER=browser
+```
+
+On Windows, use a path such as `C:/Projects/MyApp`. Keep your target project separate from the AgentOS checkout. New projects can be created from the workspace UI instead of preparing their files manually.
+
+With Ollama running, install and check the configured local model:
+
+```bash
+ollama pull qwen2.5-coder:3b
+ollama list
+```
+
+This is the repository's default model, not a guarantee of engineering-task completion. For the profile used in the successful guided run, see the [cloud demo configuration](docs/hackathon-demo-report.md#reproducing-the-approved-cloud-profile). Cloud generation sends supplied task/code context to the provider.
+
+The template disables authentication for local development and contains placeholder secrets. Keep this quickstart on localhost. Review authentication and secret configuration before exposing the service.
+
+### 3. Run the backend
+
+From the repository root, with the virtual environment active:
+
+```bash
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
+Application startup initializes the database. The default SQLite database is `data/agentos.db` under the repository root.
+
+### 4. Run the frontend
+
+In another terminal:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+The frontend defaults to `http://localhost:8000`. To change it, set `NEXT_PUBLIC_API_URL` in `frontend/.env.local` before starting or building the frontend.
+
+Open the [Control Center](http://localhost:3000) and use the development quick-access sign-in. Select or create a workspace, submit an instruction, then inspect pending approvals and task progress. The backend also exposes [API documentation](http://localhost:8000/docs) and a [liveness endpoint](http://localhost:8000/health).
+
+### 5. Run checks
+
+From the repository root:
+
+```bash
+python -m pytest backend/tests/ -q --tb=short
+```
+
+From `frontend/`:
+
+```bash
+npm run lint
+node --test tests/voice-endpoint.test.cjs
+npm run build
+```
+
+Backend regression tests explicitly select the mock model provider; passing regression tests alone does not establish real-model performance. The frontend's `npm test` script currently runs a build, so the voice-endpoint tests are listed separately above.
+
+<details>
+<summary><strong>Docker and distributed infrastructure</strong></summary>
+
+The repository contains a Dockerfile, Compose services, and PostgreSQL/Redis integration code. The checked-in Compose configuration has unset PostgreSQL credentials and volume paths, and its frontend service expects a prebuilt application. It is not a ready-to-run alternative to the local quickstart. Container deployment and distributed execution were not verified in the latest demo; configure and validate them separately.
+
+</details>
+
+## Project structure
 
 ```text
 AgentOS/
 ├── backend/
 │   ├── app/
-│   │   ├── agents/            # Supervisor, Coding, Debugger, Reviewer, Domain Experts
-│   │   ├── api/               # FastAPI route modules and v1 API router
-│   │   ├── auth/              # Authentication service, RBAC, session management
-│   │   ├── code/              # AST parser, symbol extractor, patch engine, test runner
-│   │   ├── config/            # Settings, development & production profiles
-│   │   ├── db/                # SQLAlchemy database engine, models, session manager
-│   │   ├── evaluation/        # Security, reliability, load, and phase benchmark suites
-│   │   ├── llm/               # Model factory, providers (Ollama, Anthropic, OpenAI)
-│   │   ├── models/            # Pydantic schemas (Task, Agent, Tool, Approval, Workflow)
-│   │   ├── observability/     # Metrics collector, correlation middleware, redaction
-│   │   ├── security/          # Rate limiter, sensitive file policy, agent permissions
-│   │   ├── services/          # TaskRuntime, ModelRouter, ContextEngine, BackupService, etc.
-│   │   ├── tools/             # Tool definitions (Filesystem, Terminal, Git, CodeTools)
-│   │   ├── workflows/         # LangGraph StateGraph workflow nodes and execution logic
-│   │   └── main.py            # FastAPI application entrypoint with health & ready probes
-│   ├── scripts/               # E2E scenario runners (Phase 12, Phase 13, Phase 14)
-│   └── tests/                 # 420+ Unit, integration, and security test suites
-├── frontend/                  # Next.js 15 Control Center UI
-│   ├── app/                   # App router pages (Dashboard, Tasks, Agents, Evaluation)
-│   ├── components/            # UI components (TaskMonitor, EventStream, ApprovalModal)
-│   ├── lib/                   # API client and WebSocket streaming adapters
-│   └── package.json           # Frontend dependencies and build scripts
-├── alembic/                   # Database migrations
-├── sdk/                       # AgentOS Python SDK
-├── Dockerfile                 # Multi-stage production container definition
-├── docker-compose.yml         # Container orchestration with named persistent volumes
-├── .dockerignore              # Docker build context exclusion rules
-├── .gitignore                 # Version control ignore definitions
-├── requirements.txt           # Python production dependencies
-└── pyproject.toml             # Project metadata
+│   │   ├── agents/          # Supervisor and specialized agents
+│   │   ├── api/             # HTTP routes and API boundary
+│   │   ├── code/            # Patch models, validation and application
+│   │   ├── llm/             # Model adapters and structured output
+│   │   ├── services/        # Tasks, workspaces, context and artifacts
+│   │   ├── security/        # Policies, permissions and approval controls
+│   │   ├── tools/           # Repository, terminal and test operations
+│   │   ├── voice/           # Speech providers and command routing
+│   │   └── workflows/       # Stateful execution graphs
+│   └── tests/               # Unit and integration coverage
+├── frontend/                # Next.js Control Center
+├── docs/                    # Architecture audit and verification reports
+├── .github/workflows/       # CI and security workflows
+├── .env.example             # Local configuration template
+└── requirements.txt         # Backend dependencies
 ```
 
----
+## Security
 
-## Installation & Setup
+**LLMs propose. AgentOS validates. Sensitive actions require controlled approval.**
 
-### Prerequisites
+- **Workspace boundaries:** path validation and sensitive-file checks constrain repository access and patch targets.
+- **Patch integrity:** proposed content and original-file hashes are checked before application; changed originals cause rejection rather than an unchecked overwrite.
+- **Approval checkpoints:** generated patches wait for approval, including repairs produced during recovery.
+- **Bounded execution:** command allowlists, timeouts, output limits, patch budgets, and retry limits constrain tool use.
+- **Test configuration isolation:** generated-project test processes exclude AgentOS settings such as its database URL and provider credentials.
+- **Access and accountability:** authentication/RBAC, rate limiting, audit records, and artifact integrity checks are implemented.
 
-- **Python**: 3.11+
-- **Node.js**: 20+ (with npm)
-- **Git**
+These are application-level controls, not a claim that arbitrary generated code is isolated by a VM or container. Review generated patches and use a suitable environment for executing untrusted project code.
 
-### 1. Clone the Repository
+## Current status
 
-```bash
-git clone https://github.com/azharali8/AgentOS.git
-cd AgentOS
-```
+**Active development.** The core engineering path is implemented and has completed a real, guided cloud-model demo. Model diagnosis and review can still be wrong, so independent acceptance checks and human oversight remain necessary.
 
-### 2. Backend Setup
+| Latest recorded verification — September 11, 2026 | Result |
+| :--- | :--- |
+| Backend regression | 515 passed, 1 skipped |
+| Frontend production build | Passed |
+| Frontend lint | Passed with four existing hook warnings |
+| Guided generated-project result | 6 tests and 7 independent API checks passed |
+| Physical microphone and audible TTS | Not verified |
 
-Create and activate a virtual environment:
+These are dated local results, not live CI status or benchmarks. See the [verification report](docs/hackathon-demo-report.md) and [CI workflow](.github/workflows/ci.yml).
 
-```powershell
-# Windows (PowerShell)
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+Remaining work includes improving repeatable model-driven repairs and review, validating the complete physical voice experience, and validating deployment configurations. These are development needs, not completed capabilities or a release commitment.
 
-# Linux / macOS
-python3 -m venv .venv
-source .venv/bin/activate
-```
+## Contributing
 
-Install backend dependencies:
+Contributions that improve reproducibility, engineering reliability, or security are welcome. Start with a focused issue or pull request explaining the problem, expected behavior, and how to reproduce it. For code changes, include relevant tests, preserve approval and workspace boundaries, and run the checks above.
 
-```bash
-pip install -r requirements.txt
-```
-
-Initialize the database:
-
-```bash
-alembic upgrade head
-```
-
-### 3. Frontend Setup
-
-```bash
-cd frontend
-npm.cmd install
-npm run dev
-```
-
----
-
-## Running AgentOS
-
-### Start the Backend Server
-
-```bash
-uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-### Start the Control Center Frontend
-
-```bash
-cd frontend
-npm.cmd run dev
-```
-
-Open `http://localhost:3000` to access the Control Center.
-
-### Health & Operational Endpoints
-
-- **Liveness Probe**: `GET /health` (Returns process uptime and basic status)
-- **Readiness Probe**: `GET /ready` (Verifies database integrity, workspace root, and model router health; returns HTTP 503 if degraded)
-- **Root Status**: `GET /` (Service version and status)
-
-### API v1 Key Endpoints
-
-- **Authentication**: `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`
-- **Tasks**: `POST /api/v1/tasks`, `GET /api/v1/tasks/{task_id}`, `POST /api/v1/tasks/{task_id}/cancel`, `POST /api/v1/tasks/{task_id}/pause`, `POST /api/v1/tasks/{task_id}/resume`
-- **Streaming**: `WS /api/v1/events/stream/{task_id}` (Real-time event stream with `last_event_id` replay)
-- **Approvals**: `GET /api/v1/approvals`, `POST /api/v1/approvals/{approval_id}/resolve`
-- **Workspace**: `GET /api/v1/workspace/tree`, `GET /api/v1/workspace/file`
-- **Artifacts**: `GET /api/v1/artifacts/{artifact_id}`, `GET /api/v1/artifacts/task/{task_id}`
-- **System & Runtime**: `GET /api/v1/system/status`, `GET /api/v1/system/runtime`, `GET /api/v1/system/concurrency`, `GET /api/v1/system/models`
-
----
-
-## Docker Deployment
-
-AgentOS includes a multi-stage Docker build with non-root security and persistent volumes:
-
-### Build and Start Containers
-
-```bash
-docker compose up --build -d
-```
-
-### View Service Logs
-
-```bash
-docker compose logs -f backend
-docker compose logs -f frontend
-```
-
-### Stop Containers
-
-```bash
-docker compose down
-```
-
-### Persistent Data Volumes
-
-The Docker Compose configuration mounts dedicated volumes to preserve state across restarts:
-- `agentos-data` &rarr; `/app/data` (SQLite database and backups)
-- `agentos-workspace` &rarr; `/app/workspace` (Code repository sandbox)
-- `agentos-artifacts` &rarr; `/app/artifacts` (Immutable generated artifacts)
-
----
-
-## Backup & Disaster Recovery CLI
-
-AgentOS includes an integrated SQLite backup and recovery utility with checksum verification:
-
-```bash
-# Create a timestamped, checksummed database backup
-python -m backend.app.services.backup_service create
-
-# List available database backups
-python -m backend.app.services.backup_service list
-
-# Verify integrity and checksum of a backup
-python -m backend.app.services.backup_service verify --path data/backups/agentos_backup_<timestamp>.db
-
-# Restore from a backup (includes pre-restore snapshot, verification, and table checks)
-python -m backend.app.services.backup_service restore --path data/backups/agentos_backup_<timestamp>.db
-```
-
----
-
-## Testing & Verification
-
-Run the verification test suites and benchmarks locally:
-
-```powershell
-# 1. Full Backend Test Suite (420+ unit and integration tests)
-python -m pytest backend/tests/ -q --tb=short -W ignore
-
-# 2. Phase 13 Autonomous Platform Benchmark (20 cases)
-python -m backend.app.evaluation.phase13_benchmark
-
-# 3. Phase 14 Security Benchmark (25 deterministic cases)
-python backend/app/evaluation/phase14_security_benchmark.py
-
-# 4. Phase 14 Reliability Benchmark (20 deterministic cases)
-python backend/app/evaluation/phase14_reliability_benchmark.py
-
-# 5. Phase 14 Load & Performance Test (8 performance targets)
-python backend/app/evaluation/phase14_load_test.py
-
-# 6. Phase 14 E2E Crash & Recovery Simulation
-python backend/scripts/run_e2e_phase14.py
-
-# 7. Frontend Production Build
-cd frontend; npm.cmd run build; cd ..
-```
-
-### Local Verification Results
-
-| Verification Suite | Target | Local Result | Status |
-| :--- | :--- | :--- | :---: |
-| **Backend Unit & Integration Regression** | 420+ Tests | 420 passed, 1 skipped | **PASSED** |
-| **Phase 13 Platform Benchmark** | 20 Cases | 20 / 20 (100%) | **PASSED** |
-| **Phase 14 Security Benchmark** | 25 Cases | 25 / 25 (100%) | **PASSED** |
-| **Phase 14 Reliability Benchmark** | 20 Cases | 20 / 20 (100%) | **PASSED** |
-| **Phase 14 Load & Latency Test** | 8 Targets | 8 / 8 (100%) (p95 latency &le; 50ms, recovery &le; 3ms) | **PASSED** |
-| **Phase 14 E2E Crash & Recovery** | 20 Steps | 20 / 20 (100%) | **PASSED** |
-| **Frontend Production Build** | Static Build | 4 / 4 pages compiled cleanly | **PASSED** |
-
-*(Note: These represent local test suite results executed against the repository codebase).*
-
----
-
-## Create New Projects From Scratch
-
-AgentOS supports two distinct project onboarding modes:
-
-### Mode 1: Connect Existing Project
-
-Point AgentOS at an existing software directory on your machine. AgentOS will index your files, extract AST symbols, assemble repository intelligence, and enable all specialized agents to work on your codebase immediately.
-
-### Mode 2: Create New Project From Scratch
-
-Give AgentOS a project name, parent directory, and natural-language instruction. AgentOS will:
-
-1. **Create a safe project directory** at `<location>/<name>`.
-2. **Initialize base files** — a `README.md` and `.gitignore`.
-3. **Initialize a Git repository** (if available on the machine).
-4. **Switch the active `WORKSPACE_ROOT`** to the newly created project directory.
-5. **Submit the instruction to the Supervisor** as a standard engineering task.
-6. **Execute the full engineering workflow** using existing specialized agents.
-
-**Canonical Workflow:**
-
-```text
-User Prompt ("Create a FastAPI app with JWT and tests")
-        |
-        v
-POST /api/v1/workspace/create-project
-        |
-ProjectCreatorService
-  → validate project name and location
-  → prevent path traversal & AgentOS self-targeting
-  → detect existing directory conflicts
-  → create project directory
-  → write README.md + .gitignore
-  → initialize Git
-  → switch WORKSPACE_ROOT
-        |
-        v
-TaskService.create_task (instruction passed as normal engineering task)
-        |
-        v
-SupervisorAgent
-  → understand requirements
-  → decompose into engineering plan
-  → delegate to specialized agents:
-        CodingAgent    → scaffold modules, APIs, configuration
-        TestingAgent   → write and run test suites
-        DebuggerAgent  → diagnose and fix test failures
-        ReviewerAgent  → verify code quality and security
-  → human approval where required
-        |
-        v
-Completed project, indexed and active as persistent workspace
-```
-
-**Follow-up tasks on the same project:**
-
-Once the project is created, all subsequent prompts operate naturally against the same workspace:
-
-- `"Add email authentication."`
-- `"Write integration tests for the auth module."`
-- `"Run the tests and fix failures."`
-- `"Perform a security review."`
-
-**Safety guarantees:**
-
-- Project directories can only be created **outside** the AgentOS installation tree.
-- Path traversal (`..`), null bytes, and UNC paths are rejected.
-- If the target directory already exists and is non-empty, creation is **rejected** (HTTP 409 Conflict).
-- If the engineering task fails, the **project directory is preserved**. Failure is tracked in the existing task state machine and visible through the AgentOS task activity view.
-
-**API:**
-
-```http
-POST /api/v1/workspace/create-project
-Content-Type: application/json
-
-{
-  "name": "TaskFlow",
-  "location": "D:/Projects",
-  "instruction": "Create a FastAPI task management API with JWT authentication and PostgreSQL",
-  "auto_start_task": true
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "project_name": "TaskFlow",
-  "path": "D:/Projects/TaskFlow",
-  "git_initialized": true,
-  "task_id": "task-abc12345-..."
-}
-```
-
----
-
-## Voice Agent & Audio Interface
-
-AgentOS features a dedicated **Voice Agent** interface powered by **AssemblyAI** Speech-to-Text and the **AgentOS Command Gateway**:
-
-```text
-                     USER (Voice / Speech)
-                               │
-                               ▼
-               ┌───────────────────────────────┐
-               │          VOICE AGENT          │
-               │                               │
-               │  • AssemblyAI STT             │
-               │  • Intent Understanding       │
-               │  • Multi-Turn Conversation    │
-               │  • Confirmation Gate (Safety) │
-               │  • Natural TTS Summarizer     │
-               └───────────────┬───────────────┘
-                               │
-                               ▼
-               ┌───────────────────────────────┐
-               │    AGENTOS COMMAND GATEWAY    │
-               │                               │
-               │  • Safe Task Creation         │
-               │  • Project Scaffold / Connect │
-               │  • Test Suite Execution       │
-               │  • Codebase Inspection        │
-               │  • Failure Diagnosis          │
-               │  • Code Review & Artifacts    │
-               │  • Approval Resolution        │
-               └───────────────┬───────────────┘
-                               │
-                               ▼
-               ┌───────────────────────────────┐
-               │          SUPERVISOR           │
-               │     (Central Engineering      │
-               │     Brain & Orchestration)    │
-               └───────────────┬───────────────┘
-                               │
-                               ▼
-               ┌───────────────────────────────┐
-               │        AGENTOS ENGINE         │
-               │                               │
-               │  Coding • Debugging • Testing │
-               │  Review • Repository Intel    │
-               │  Sandbox Mutation • Artifacts │
-               └───────────────────────────────┘
-```
-
-> **Architectural Principle**: The **Voice Agent** serves as the voice controller and conversational interface for the system. It delegates all software engineering planning and task execution to the **Supervisor** and existing specialized agents without duplicating engineering logic.
-
-### Voice Capabilities & Supported Commands
-
-The Voice Agent controls the major user-facing capabilities of AgentOS:
-
-- **Project Management**:
-  - *"Create a FastAPI URL shortener with authentication and tests."* &rarr; Scaffolds new bounded project and switches workspace.
-  - *"Create a new project."* &rarr; Multi-turn conversational flow asking for project name, archetype, and confirmation.
-  - *"Open my AgentOS project."* &rarr; Inspects project structure, manifests, and entry points.
-- **Autonomous Engineering**:
-  - *"Fix the failing authentication test."* &rarr; Dispatches debugging and code repair to Supervisor.
-  - *"Review the changes and explain what you modified."* &rarr; Triggers Reviewer agent for security and code quality audit.
-- **Testing & Failure Investigation**:
-  - *"Run the tests again and tell me the result."* &rarr; Executes test discovery and reports passed/failed counts and duration.
-  - *"Why did the tests fail?"* &rarr; Autonomous root cause diagnosis by Debugger agent.
-- **Safety & Human Approvals**:
-  - *"Wipe the database / Delete project files"* &rarr; Triggers confirmation gate: *"This operation may modify or delete files. Please say 'confirm' to proceed or 'cancel' to abort."*
-  - *"Approve action [id]"* / *"Reject action [id]"* &rarr; Resolves human-in-the-loop security gates verbally.
-
-### Voice API Endpoints
-
-- `GET /api/v1/voice/status` — Returns active STT provider (`assemblyai` / `mock`), configured TTS provider, and operational quotas.
-- `POST /api/v1/voice/transcribe` — Uploads raw audio (`.webm`, `.wav`, `.mp3`, `.ogg`, `.m4a`) and returns high-accuracy transcript with confidence score.
-- `POST /api/v1/voice/execute` — End-to-end voice invocation: transcribes audio, parses intent via Voice Agent, executes through Command Gateway, and returns natural voice summary.
-- `POST /api/v1/voice/command` — Direct natural-language text invocation for voice controller commands.
-- `POST /api/v1/voice/synthesize` — Synthesizes natural agent feedback or execution summaries into speech.
-
-### Voice Configuration (`.env`)
-
-```env
-ASSEMBLYAI_API_KEY=your_assemblyai_api_key_here
-VOICE_PROVIDER=assemblyai
-VOICE_TTS_PROVIDER=browser
-VOICE_MAX_AUDIO_SIZE_BYTES=26214400
-VOICE_TIMEOUT_SECONDS=120
-```
-
----
-
-## Current Status
-
-AgentOS has completed **Phases 0 through 15**. The system supports dual project onboarding (connect existing + create from scratch), durable task execution, bounded context management, model routing, multi-domain rate limiting, non-linear state machines, and disaster recovery.
-
----
-
-## Roadmap
-
-Planned future enhancements:
-- Distributed worker queues (Celery / Redis / Temporal)
-- Multi-database backend support (PostgreSQL / MySQL)
-- Expanded cloud deployment templates (Kubernetes Helm charts, AWS ECS)
-- OpenTelemetry metrics and distributed tracing exporters
-- Additional LLM provider integrations (Google Gemini, Mistral, AWS Bedrock)
-- CI/CD pipeline automation bots and GitHub Actions integration
-
----
+The repository does not yet include a dedicated contributing guide or a documented maintainer support policy.
 
 ## License
 
-Licensing information is not yet specified.
+The repository contains an empty [LICENSE](LICENSE) file. No license terms have been specified; an open-source license cannot currently be stated.

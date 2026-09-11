@@ -27,3 +27,7 @@ class MultiAgentState(TypedDict, total=False):
     patch_hash: Optional[str]
     final_response: str
     error: Optional[str]
+    pending_coding_id: Optional[str]
+    applied_coding_ids: List[str]
+    security_passed: bool
+    recovery_replacements: Dict[str, str]

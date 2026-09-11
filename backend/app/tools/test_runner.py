@@ -334,6 +334,7 @@ class TestRunnerTool(BaseTool):
                 text=True,
                 cwd=str(cwd),
                 shell=False,
+                env=self._project_test_environment(),
                 timeout=settings.MAX_TEST_RUNTIME,
             )
             duration = time.monotonic() - start
@@ -381,6 +382,7 @@ class TestRunnerTool(BaseTool):
                 text=True,
                 cwd=str(self._root),
                 shell=False,
+                env=self._project_test_environment(),
                 timeout=settings.MAX_TEST_RUNTIME,
             )
             duration = time.monotonic() - start
@@ -407,6 +409,14 @@ class TestRunnerTool(BaseTool):
                 duration_seconds=0,
                 error="npm executable not found",
             )
+
+
+    @staticmethod
+    def _project_test_environment() -> dict[str, str]:
+        """Do not leak AgentOS configuration or service credentials to project tests."""
+        import os
+        server_keys = {key.upper() for key in type(settings).model_fields}
+        return {key: value for key, value in os.environ.items() if key.upper() not in server_keys}
 
 
 # Register on import

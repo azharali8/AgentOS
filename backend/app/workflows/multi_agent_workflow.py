@@ -38,19 +38,21 @@ def _route_after_execution(state: MultiAgentState) -> str:
     subtasks = state.get("subtasks", [])
     completed_ids = set(state.get("completed_subtask_ids", []))
 
+    if state.get("status") in ("FAILED", "CANCELLED", "PAUSED"):
+        return "final_response"
+    if state.get("pending_coding_id"):
+        return "human_approval"
+
     if len(completed_ids) < len(subtasks):
         return "parallel_execution"
-
-    if state.get("approval_required") and state.get("approval_status") != "APPROVED":
-        return "human_approval"
 
     return "security_review"
 
 
 def _route_after_approval(state: MultiAgentState) -> str:
-    if state.get("approval_status") == "REJECTED":
+    if state.get("status") in ("FAILED", "CANCELLED") or state.get("approval_status") == "REJECTED":
         return "final_response"
-    return "security_review"
+    return "parallel_execution"
 
 
 def build_multi_agent_graph() -> StateGraph:
@@ -76,6 +78,7 @@ def build_multi_agent_graph() -> StateGraph:
             "parallel_execution": "parallel_execution",
             "human_approval": "human_approval",
             "security_review": "security_review",
+            "final_response": "final_response",
         },
     )
 
@@ -83,7 +86,7 @@ def build_multi_agent_graph() -> StateGraph:
         "human_approval",
         _route_after_approval,
         {
-            "security_review": "security_review",
+            "parallel_execution": "parallel_execution",
             "final_response": "final_response",
         },
     )

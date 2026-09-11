@@ -383,7 +383,3 @@ class QueueEntryModel(Base):
         Index("ix_task_queue_idempotency", "idempotency_key"),
     )
 
-
-from backend.app.db.database import engine  # noqa: E402
-Base.metadata.create_all(bind=engine)
-

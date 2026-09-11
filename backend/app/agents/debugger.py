@@ -64,11 +64,13 @@ class DebuggerAgent:
         llm_provider: Optional[BaseLLMProvider] = None,
         max_iterations: int = 3,
         framework: str = "pytest",
+        strict: bool = False,
     ) -> None:
         self.task_id = task_id
         self.llm = llm_provider or get_llm_provider()
         self.max_iterations = min(max_iterations, 5)
         self.framework = framework
+        self.strict = strict
         self.validator = PatchValidator()
         self.applier = PatchApplier()
         self.state = DebuggerState()
@@ -83,23 +85,15 @@ class DebuggerAgent:
         """Formulate a structured DebugDiagnosis without modifying any code."""
         prompt = (
             f"{DEBUGGER_PROMPT}\n"
-            f"Failures: {json.dumps([f.model_dump() for f in failures])}\n"
+            f"Failures: {json.dumps([f.model_dump(exclude={'traceback'}) for f in failures[:5]])}\n"
             f"Investigation: {json.dumps(investigation.model_dump())}"
         )
         try:
-            raw_res = self.llm.generate(prompt)
-            text = raw_res.strip()
-            if text.startswith("```"):
-                lines = text.splitlines()
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                text = "\n".join(lines).strip()
-
-            parsed = json.loads(text)
-            return DebugDiagnosis(**parsed)
+            from backend.app.llm.structured import generate_structured
+            return generate_structured(self.llm, prompt, DebugDiagnosis)
         except Exception as exc:
+            if self.strict:
+                raise RuntimeError(f"Model diagnosis unavailable: {exc}") from exc
             logger.warning("Debugger diagnosis LLM fallback: %s", exc)
             return DebugDiagnosis(
                 root_cause=investigation.suspected_root_cause or "Assertion mismatch in implementation",

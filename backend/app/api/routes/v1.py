@@ -190,7 +190,7 @@ def create_task(req: TaskCreateRequestV1, user: AuthenticatedUser = Depends(get_
             try:
                 # Use MultiAgentService with existing task ID
                 TaskService.update_task_status(task_record.task_id, TaskStatus.PLANNING)
-                graph = MultiAgentService.start_task(instruction=req.task, sync=True)
+                graph = MultiAgentService.start_task(instruction=req.task, sync=True, task_id=task_record.task_id)
             except Exception as e:
                 TaskService.set_error(task_record.task_id, str(e))
 
@@ -1099,7 +1099,7 @@ def create_project_v1(
         def _bg_execute():
             try:
                 TaskService.update_task_status(task_record.task_id, TaskStatus.PLANNING)
-                MultiAgentService.start_task(instruction=req.instruction.strip(), sync=True)
+                MultiAgentService.start_task(instruction=req.instruction.strip(), sync=True, task_id=task_id)
             except Exception as exc:
                 TaskService.set_error(task_record.task_id, str(exc))
 
@@ -1178,26 +1178,36 @@ async def stream_task_events_ws(
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         
-        # Stream existing events (support replay from last_event_id)
-        events = EventService.list_events(task_id, limit=100)
-        send_events = events
-        if last_event_id:
-            # Find index of last_event_id and only replay events after it
-            idx = next((i for i, e in enumerate(events) if e.get("event_id") == last_event_id), -1)
-            if idx != -1:
-                send_events = events[idx + 1:]
-
-        for ev in send_events:
-            ev_data = dict(ev)
-            if isinstance(ev_data.get("timestamp"), datetime):
-                ev_data["timestamp"] = ev_data["timestamp"].isoformat()
-            await websocket.send_json(ev_data)
-            
-        # Keep alive for incoming messages / heartbeats
+        # Replay and tail the existing durable event log. Offset advances only
+        # after delivery; reconnects replay until their acknowledged event ID.
+        import asyncio
+        offset = 0
+        replaying = bool(last_event_id)
         while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_text("pong")
+            events = await asyncio.to_thread(EventService.list_events, task_id, 100, offset)
+            for ev in events:
+                offset += 1
+                if replaying:
+                    if ev.get("event_id") == last_event_id:
+                        replaying = False
+                    continue
+                ev_data = dict(ev)
+                if isinstance(ev_data.get("timestamp"), datetime):
+                    ev_data["timestamp"] = ev_data["timestamp"].isoformat()
+                await websocket.send_json(ev_data)
+            if len(events) == 100:
+                continue
+            if replaying:
+                # Cursor no longer exists: replay history; the client deduplicates.
+                replaying = False
+                offset = 0
+                continue
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=0.5)
+                if data == "ping":
+                    await websocket.send_text("pong")
+            except asyncio.TimeoutError:
+                pass
     except WebSocketDisconnect:
         pass
 

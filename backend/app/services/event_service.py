@@ -26,7 +26,7 @@ class EventService:
         event_backend = getattr(settings, "EVENT_BACKEND", "db")
 
         # 1. DB persistence
-        if event_backend in ("db", "both", "sqlite"):
+        if event_backend in ("db", "both", "sqlite", "redis"):
             with get_db_session() as session:
                 repo = EventRepository(session)
                 model = EventModel(

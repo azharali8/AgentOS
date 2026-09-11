@@ -149,6 +149,9 @@ class PatchValidator:
                 except OSError as exc:
                     errors.append(f"Cannot read file {pf.relative_path}: {exc}")
 
+        if pf.is_new_file and resolved.exists():
+            errors.append(f"New file already exists: {pf.relative_path}")
+
         # 5. Hunk sanity
         if not pf.hunks and not pf.is_deleted_file:
             errors.append(f"No hunks in patch for {pf.relative_path}")

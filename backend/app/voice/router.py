@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
-from backend.app.auth.service import AuthenticatedUser, get_current_user
+from backend.app.auth.service import AuthenticatedUser, get_current_user, require_role, UserRole
 from backend.app.voice.agent.agent import VoiceAgent
 from backend.app.voice.providers.assemblyai import (
     AssemblyAIAuthError,
@@ -86,7 +86,7 @@ async def execute_voice_command(
     session_id: str = Form(default="default-session"),
     auto_start: bool = Form(default=True),
     sync: bool = Form(default=False),
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_role(UserRole.USER)),
 ) -> VoiceExecuteResponse:
     """
     Core Voice Endpoint:
@@ -103,6 +103,7 @@ async def execute_voice_command(
             session_id=session_id,
             auto_start=auto_start,
             sync=sync,
+            user_role=user.role.value,
         )
     except InvalidAudioError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -120,24 +121,12 @@ async def execute_voice_command(
 @router.post("/command", response_model=VoiceExecuteResponse)
 async def execute_text_command(
     req: TextCommandRequest,
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_role(UserRole.USER)),
 ) -> VoiceExecuteResponse:
     """Process a typed voice-style command directly through the VoiceAgent."""
     try:
-        conv = VoiceService.get_conversation_state(req.session_id)
-        agent = VoiceAgent(conversation=conv)
-        agent_res = agent.process(transcript=req.command, user_id=user.user_id)
-
-        return VoiceExecuteResponse(
-            status=agent_res.status,
-            transcript=req.command,
-            task_id=agent_res.task_id,
-            project_created=agent_res.project_created,
-            project_path=agent_res.project_path,
-            tts_summary=agent_res.tts_summary,
-            provider="text",
-            confidence=1.0,
-        )
+        return VoiceService.process_transcript(req.command, user_id=user.user_id,
+                                               session_id=req.session_id, user_role=user.role.value)
     except Exception as exc:
         logger.error("Text command processing error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Command processing failed: {str(exc)}")

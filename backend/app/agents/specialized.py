@@ -127,67 +127,137 @@ class CodingAgent:
         self.intelligence = RepoIntelligence()
 
 
-    def formulate_patch(self, subtask: SubTask, diagnosis_evidence: Optional[Dict[str, Any]] = None) -> Patch:
+    def formulate_patch(self, subtask: SubTask, diagnosis_evidence: Optional[Dict[str, Any]] = None,
+                        _allow_context_expansion: bool = True) -> Patch:
         """Create a candidate Patch object based on diagnosis or instruction."""
-        task_id = subtask.task_id
-        target_files = subtask.target_files if subtask.target_files else self.intelligence.get_first_workspace_files(max_files=1)
-        if not target_files:
-            # Workspace is empty — return an empty patch rather than assuming a filename
-            target_files = []
+        import difflib
+        import uuid
+        from backend.app.security.sensitive_files import is_sensitive_path
 
-        patch_files: List[PatchFile] = []
+        targets = subtask.target_files or self.intelligence.get_first_workspace_files(max_files=3)
+        originals = {}
+        for target in targets[:settings.MAX_PATCH_FILES]:
+            if is_sensitive_path(target):
+                raise ValueError("Sensitive files cannot be sent to the coding model")
+            path = WorkspaceService.validate_path(target)
+            if path.is_file():
+                if path.stat().st_size > settings.MAX_FILE_SIZE:
+                    raise ValueError(f"File exceeds coding context limit: {target}")
+                originals[target] = path.read_text(encoding="utf-8")
+                if sum(len(text) for text in originals.values()) > 64000:
+                    raise ValueError("Coding context exceeds the bounded file budget; narrow the task")
 
-        for target_file in target_files:
-            resolved = WorkspaceService.validate_path(target_file)
-            orig_bytes = resolved.read_bytes() if resolved.exists() else b""
-            orig_hash = compute_file_hash(orig_bytes)
-            orig_text = orig_bytes.decode("utf-8", errors="replace")
-
-            hunks = []
-            desc = subtask.description.lower()
-
-            if "return a - b" in orig_text:
-                hunks.append(PatchHunk(
-                    original_start=2, original_count=1, new_start=2, new_count=1,
-                    lines=["-    return a - b\n", "+    return a + b\n"],
-                ))
-            elif "divide" in desc and "def divide" not in orig_text:
-                hunks.append(PatchHunk(
-                    original_start=max(1, len(orig_text.splitlines())), original_count=0,
-                    new_start=max(1, len(orig_text.splitlines())) + 1, new_count=4,
-                    lines=[
-                        "+def divide(a: float, b: float) -> float:\n",
-                        "+    if b == 0:\n",
-                        "+        raise ValueError('Division by zero')\n",
-                        "+    return a / b\n",
-                    ],
-                ))
-            elif "validate" in desc or "auth" in desc or "validator" in target_file:
-                hunks.append(PatchHunk(
-                    original_start=1, original_count=0, new_start=1, new_count=4,
-                    lines=[
-                        "+def validate_credentials(email: str, password: str) -> bool:\n",
-                        "+    if not email or '@' not in email or len(password) < 6:\n",
-                        "+        return False\n",
-                        "+    return True\n",
-                    ],
-                ))
-            else:
-                hunks.append(PatchHunk(
-                    original_start=1, original_count=max(1, len(orig_text.splitlines())),
-                    new_start=1, new_count=2,
-                    lines=["+def add(a, b):\n", "+    return a + b\n"],
-                ))
-
-            pf = PatchFile(relative_path=target_file, original_hash=orig_hash, hunks=hunks)
-            patch_files.append(pf)
-
-        return Patch(
-            patch_id=f"patch-{task_id[:8]}",
-            task_id=task_id,
-            description=f"Changes for {', '.join(target_files)}: {subtask.description}",
-            files=patch_files,
+        dependencies = {}
+        for key, value in (diagnosis_evidence or {}).items():
+            if not isinstance(value, dict):
+                if isinstance(value, str) and key != "user_instruction":
+                    dependencies[key] = value[:2000]
+                continue
+            if "evidence" not in value:
+                dependencies[key] = value
+                continue
+            evidence = value.get("evidence", {})
+            test_data = evidence.get("test_res", {}).get("data") or evidence.get("test_results", {})
+            dependencies[key] = {
+                "status": value.get("status"), "summary": value.get("summary"), "error": value.get("error"),
+                "diagnosis": evidence.get("diagnosis"),
+                "test_stdout": str(test_data.get("stdout", ""))[-2000:],
+                "test_stderr": str(test_data.get("stderr", ""))[-1000:],
+            }
+        context = {
+            "instruction": subtask.description,
+            "original_user_request": (diagnosis_evidence or {}).get("user_instruction", subtask.description),
+            "files": originals,
+            "dependency_results": dependencies,
+        }
+        import importlib.metadata
+        import sys
+        context["runtime"] = {"python": sys.version.split()[0], "packages": {}}
+        for package in ("fastapi", "pydantic", "httpx", "pytest", "sqlalchemy"):
+            try:
+                context["runtime"]["packages"][package] = importlib.metadata.version(package)
+            except importlib.metadata.PackageNotFoundError:
+                pass
+        prompt = (
+            "CODING_CHANGES_PROMPT:\n"
+            "Implement the instruction using the supplied repository context. Return JSON only: "
+            '{"files": [{"path": "relative/path", "content": "complete updated file contents"}]}. '
+            "Include new files and tests needed by the instruction. Preserve unrelated content. "
+            "Fulfill EVERY requirement of original_user_request, even if the subtask description is abbreviated. "
+            "Do not return placeholders, simulated features, TODO implementations or demo-only security. "
+            "Authentication must verify unforgeable credentials/tokens and store salted password hashes, never plaintext passwords or token prefixes as proof. "
+            "HTTP endpoints must perform the requested behavior, not return a description of that behavior. "
+            "Build application URLs from the incoming request, never from hardcoded test hostnames. "
+            "Keep small applications compact; avoid duplicate implementations and unnecessary dependencies. "
+            "Use the supplied runtime package versions and Python standard library. Never list standard-library modules as pip dependencies. "
+            "Tests must be executable, define all fixtures, and cover requested functionality and rejection/error cases. "
+            "For FastAPI tests use fastapi.testclient.TestClient with follow_redirects, not allow_redirects; httpx AsyncClient(app=...) is not supported by modern httpx. "
+            "When fixing failures, do not weaken valid test assertions or coverage; repair implementation or missing test setup. "
+            "Never invent a successful test result. No shell commands. "
+            f"Limit changes to {settings.MAX_PATCH_FILES} files and {settings.MAX_PATCH_LINES} diff lines.\n"
+            "CONTEXT_JSON:\n" + json.dumps(context)
         )
+        from backend.app.llm.structured import GeneratedFiles, generate_structured
+        changes = generate_structured(self.llm, prompt, GeneratedFiles).model_dump()["files"]
+        if not isinstance(changes, list) or not changes or len(changes) > settings.MAX_PATCH_FILES:
+            raise ValueError("Coding model must return a bounded, nonempty files list")
+        unread = []
+        for change in changes:
+            target = change["path"]
+            path = WorkspaceService.validate_path(target)
+            if is_sensitive_path(target):
+                raise ValueError("Sensitive files cannot be sent to the coding model")
+            if path.exists() and target not in originals:
+                unread.append(target)
+        if unread and _allow_context_expansion:
+            expanded_targets = list(dict.fromkeys(list(originals) + unread))
+            if len(expanded_targets) > settings.MAX_PATCH_FILES:
+                raise ValueError("Expanded coding context exceeds the file budget")
+            # Discard the first proposal. Read actual originals and regenerate;
+            # never apply content generated without inspecting an existing file.
+            expanded = subtask.model_copy(update={"target_files": expanded_targets})
+            return self.formulate_patch(expanded, diagnosis_evidence, _allow_context_expansion=False)
+        patch_files = []
+        seen = set()
+        for change in changes:
+            target, content = change["path"], change["content"]
+            path = WorkspaceService.validate_path(target)
+            if path in seen or is_sensitive_path(target) or not isinstance(content, str):
+                raise ValueError("Invalid, duplicate or sensitive coding target")
+            seen.add(path)
+            if len(content.encode("utf-8")) > settings.MAX_FILE_SIZE:
+                raise ValueError("Generated file exceeds size limit")
+            # Never overwrite an existing file that was not supplied to the model.
+            if path.exists() and target not in originals:
+                raise ValueError(f"Model proposed an uninspected existing file: {target}")
+            original = originals.get(target, "")
+            if path.exists() and path.read_text(encoding="utf-8") != original:
+                raise ValueError(f"File changed during generation: {target}")
+            if content == original and path.exists():
+                continue
+            old, new = original.splitlines(keepends=True), content.splitlines(keepends=True)
+            hunks = []
+            for group in difflib.SequenceMatcher(a=old, b=new).get_grouped_opcodes(3):
+                lines = []
+                for tag, i, j, k, l in group:
+                    if tag == "equal":
+                        lines.extend(" " + line for line in old[i:j])
+                    else:
+                        if tag in ("replace", "delete"):
+                            lines.extend("-" + line for line in old[i:j])
+                        if tag in ("replace", "insert"):
+                            lines.extend("+" + line for line in new[k:l])
+                hunks.append(PatchHunk(
+                    original_start=group[0][1] + 1, original_count=group[-1][2] - group[0][1],
+                    new_start=group[0][3] + 1, new_count=group[-1][4] - group[0][3], lines=lines,
+                ))
+            patch_files.append(PatchFile(
+                relative_path=target, is_new_file=not path.exists(),
+                original_hash=compute_file_hash(path.read_bytes()) if path.exists() else None,
+                hunks=hunks,
+            ))
+        return Patch(patch_id=str(uuid.uuid4()), task_id=subtask.task_id,
+                     description=subtask.description, files=patch_files)
 
     def apply_patch(self, patch: Patch, expected_patch_hash: Optional[str] = None) -> Dict[str, Any]:
         """Cryptographically apply an approved patch to the workspace."""
