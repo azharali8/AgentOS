@@ -164,6 +164,8 @@ class AgentOSCommandGateway:
     def get_workspace_status() -> Dict[str, Any]:
         """Inspect active project structure, technologies, entry points, and test files."""
         try:
+            if not Path(settings.WORKSPACE_ROOT).is_dir():
+                raise ValueError("Workspace directory is unavailable")
             from backend.app.services.repo_intelligence import RepoIntelligence
             repo_intel = RepoIntelligence()
             overview = repo_intel.inspect_overview()
@@ -179,10 +181,9 @@ class AgentOSCommandGateway:
             }
         except Exception as exc:
             logger.warning("get_workspace_status error: %s", exc)
-            ws_name = Path(settings.WORKSPACE_ROOT).name
             return {
-                "status": "ok",
-                "tts_message": f"Active workspace is {ws_name}.",
+                "status": "failed",
+                "tts_message": "I couldn't inspect the workspace. Check that the active project is available and readable.",
             }
 
     # ------------------------------------------------------------------

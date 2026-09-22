@@ -13,11 +13,26 @@ from backend.app.services.model_router import ModelRouter, ModelStatus
 from backend.app.services.task_decomposer import TaskDecomposer
 from backend.app.voice.agent.agent import VoiceAgent
 from backend.app.voice.agent.conversation import ConversationState
+from backend.app.llm.evidence import failure_excerpt
+
+
+def test_failure_context_preserves_assertion_ahead_of_long_warning_tail():
+    failure = '_____ test_redirect _____\n> assert info["target_url"] == target\nE AssertionError: URLs differ\ntest_app.py:42\n'
+    output = failure + '================ warnings summary ================\n' + 'DeprecationWarning\n' * 1000
+    excerpt = failure_excerpt(output)
+    assert 'assert info["target_url"] == target' in excerpt
+    assert 'test_app.py:42' in excerpt and 'DeprecationWarning' not in excerpt
+
+
+def test_failure_context_remains_bounded_without_warning_section():
+    excerpt = failure_excerpt('first failure\n' + 'x' * 10000 + '\nlast failure')
+    assert len(excerpt) == 4000
+    assert excerpt.startswith('first failure') and excerpt.endswith('last failure')
 
 
 def test_malformed_and_wrong_shape_output_regenerates_without_partial_execution(monkeypatch):
     monkeypatch.setattr(settings, "LLM_STRUCTURED_ATTEMPTS", 3)
-    provider = MockLLMProvider(response_queue=['{"files":', '{"files": [{"path": "app.py", "content": 42}]}',
+    provider = MockLLMProvider(response_queue=['{"files": [{"path": "app.py", "content": 42}]}',
         json.dumps({"files": [{"path": "app.py", "content": "answer = 42\n"}]})])
     result = generate_structured(provider, "Generate files", GeneratedFiles)
     assert result.files[0].content == "answer = 42\n"
@@ -56,6 +71,32 @@ def test_missing_model_health_is_unavailable_even_when_server_is_up(monkeypatch)
     health = ModelRouter.check_health()
     assert health.status == ModelStatus.UNAVAILABLE
     assert "not installed" in health.error
+
+
+def test_missing_model_fails_real_task_before_execution(monkeypatch, tmp_path):
+    from backend.app.services.multi_agent_service import MultiAgentService
+    from backend.app.models.task import TaskStatus
+    monkeypatch.setattr(settings, 'LLM_PROVIDER', 'ollama')
+    monkeypatch.setattr(settings, 'OLLAMA_MODEL', 'missing-model')
+    monkeypatch.setattr(settings, 'WORKSPACE_ROOT', str(tmp_path))
+    monkeypatch.setattr(httpx, 'get', lambda url, **kw: httpx.Response(200,
+        request=httpx.Request('GET', url), json={'models': []}))
+    result = MultiAgentService.start_task('Implement a service with tests', sync=True)
+    assert result.status == TaskStatus.FAILED
+    assert 'not installed' in result.error
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('metadata', [{'models': [{'name': 'tiny:latest'}]}, {'models': []}, {'unexpected': []}])
+def test_model_preflight_validates_inventory(monkeypatch, metadata):
+    monkeypatch.setattr(settings, 'OLLAMA_MODEL', 'tiny')
+    monkeypatch.setattr(httpx, 'get', lambda url, **kw: httpx.Response(200,
+        request=httpx.Request('GET', url), json=metadata))
+    if metadata.get('models'):
+        OllamaProvider().check_available()
+    else:
+        with pytest.raises(RuntimeError):
+            OllamaProvider().check_available()
 
 
 def test_network_failure_cannot_become_heuristic_plan_or_successful_review():
@@ -114,7 +155,7 @@ def test_unread_existing_target_is_read_and_regenerated_before_patch(tmp_path, m
         def generate(self, prompt, **kwargs):
             prompts.append(prompt)
             return json.dumps({"files": [{"path": "test_app.py", "content":
-                "assert False\n" if len(prompts) == 1 else "assert 1 == 1\n"}]})
+                "assert False\n" if len(prompts) == 1 else "assert True\nassert 1 == 1\n"}]})
     patch = CodingAgent(Model()).formulate_patch(SubTask(task_id="context", subtask_id="code",
         description="Update tests", assigned_agent=AgentType.CODING, target_files=["app.py"]))
     assert len(prompts) == 2
@@ -122,3 +163,46 @@ def test_unread_existing_target_is_read_and_regenerated_before_patch(tmp_path, m
     assert (tmp_path / "test_app.py").read_text() == "assert True\n"
     assert any("assert 1 == 1" in line for h in patch.files[0].hunks for line in h.lines)
     assert not any("assert False" in line for h in patch.files[0].hunks for line in h.lines)
+
+
+def test_generated_absolute_path_is_repaired_once(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_STRUCTURED_ATTEMPTS", 2)
+    calls = []
+    class Provider:
+        def generate(self, prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps({"files": [{"path": "/main.py" if len(calls) == 1 else "main.py", "content": "x = 1"}]})
+    assert generate_structured(Provider(), "Generate", GeneratedFiles).files[0].path == "main.py"
+    assert len(calls) == 2 and "workspace-relative" in calls[1]
+
+
+@pytest.mark.parametrize("path", ["/main.py", "C:\\main.py", "../main.py", "//host/share/a.py"])
+def test_generated_paths_never_escape_after_retry(monkeypatch, path):
+    monkeypatch.setattr(settings, "LLM_STRUCTURED_ATTEMPTS", 3)
+    calls = []
+    class Provider:
+        def generate(self, prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps({"files": [{"path": path, "content": "x = 1"}]})
+    with pytest.raises(ValueError, match="bounded retries"):
+        generate_structured(Provider(), "Generate", GeneratedFiles)
+    assert len(calls) == 2
+
+
+def test_task_model_snapshot_reaches_supervisor_and_worker(monkeypatch):
+    from backend.app.workflows.multi_agent_nodes import _supervisor
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "ollama")
+    monkeypatch.setattr(settings, "OLLAMA_MODEL", "new-selection")
+    supervisor = _supervisor({"selected_model": "selected-at-task-start"})
+    assert supervisor.llm.model == "selected-at-task-start"
+    assert supervisor.decomposer.llm is supervisor.llm
+    assert supervisor.coding_agent.llm is supervisor.llm
+    assert settings.OLLAMA_MODEL == "new-selection"
+
+
+def test_cloud_payment_failure_is_actionable_without_leaking_body(monkeypatch):
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: httpx.Response(402,
+        request=httpx.Request("POST", "http://localhost"), json={"error": "secret-private-body"}))
+    with pytest.raises(RuntimeError, match="HTTP 402.*account") as exc:
+        OllamaProvider().generate("hello")
+    assert "secret-private-body" not in str(exc.value)

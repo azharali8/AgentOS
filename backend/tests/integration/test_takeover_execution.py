@@ -154,3 +154,16 @@ async def test_provider_ignores_processing_text_until_completed(monkeypatch):
                         lambda **kw: real_client(transport=httpx.MockTransport(handle), **kw))
     result = await AssemblyAIProvider("test-key", timeout_seconds=10).transcribe(b"audio" * 100)
     assert result.transcript == "Run tests" and len(polls) == 2
+
+
+def test_browser_approval_endpoint_resumes_engineering(engineering_runtime, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+    from backend.app.services.task_service import TaskService
+    monkeypatch.setattr(settings, 'AUTH_ENABLED', False)
+    task = MultiAgentService.start_task('Change VALUE to 22 and verify', sync=True)
+    assert task.status == TaskStatus.WAITING_APPROVAL
+    response = TestClient(app).post(f'/api/v1/approvals/{task.approval_id}/resolve',json={'approved': True})
+    assert response.status_code == 200
+    assert TaskService.get_task(task.task_id).status == TaskStatus.COMPLETED
+    assert (engineering_runtime / 'value.py').read_text() == 'VALUE = 22\n'

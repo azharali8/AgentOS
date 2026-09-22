@@ -1,5 +1,5 @@
 """
-AgentOS Phase 6 & 14 — Hardened Authentication & RBAC Service.
+AgentOS Phase 6 & 14 â€” Hardened Authentication & RBAC Service.
 
 Implements:
 - Session expiration and sliding window refresh
@@ -14,6 +14,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
+import threading
+import string
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional, Set
@@ -22,6 +24,13 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from backend.app.config.settings import settings
+
+REGISTRATION_PASSWORD_MIN = 8
+REGISTRATION_PASSWORD_MAX = 20
+REGISTRATION_PASSWORD_MESSAGE = 'Use 8 to 20 characters and at least one special character (such as !, @, # or $).'
+
+def valid_registration_password(password: str) -> bool:
+    return REGISTRATION_PASSWORD_MIN <= len(password) <= REGISTRATION_PASSWORD_MAX and any(c in string.punctuation for c in password)
 
 
 class UserRole(str, Enum):
@@ -60,6 +69,18 @@ class AuthService:
     SESSION_TTL_SECONDS = 3600  # 1 hour
     MAX_FAILED_ATTEMPTS = 5
     LOCKOUT_SECONDS = 900  # 15 min
+    _registration_lock = threading.Lock()
+
+    @classmethod
+    def register_local_account(cls, email: str, username: str, password: str) -> bool:
+        if not valid_registration_password(password):
+            raise ValueError(REGISTRATION_PASSWORD_MESSAGE)
+        with cls._registration_lock:
+            email, username = email.strip().lower(), username.strip()
+            if email in cls._credentials_by_email or any(c.username.casefold() == username.casefold() for c in cls._credentials_by_email.values()):
+                return False
+            cls.register_user(email, username, password, UserRole.USER)
+            return True
 
     @classmethod
     def hash_password(cls, password: str) -> str:
@@ -120,13 +141,18 @@ class AuthService:
 
     @classmethod
     def authenticate_credentials(cls, email: str, password: str) -> Optional[tuple[AuthenticatedUser, str]]:
+        email = email.strip().lower()
+        creds = cls._credentials_by_email.get(email)
+        if creds is None:
+            matches = [c for c in cls._credentials_by_email.values() if c.username.casefold() == email.casefold()]
+            if len(matches) == 1:
+                creds, email = matches[0], matches[0].email
         if cls.is_locked_out(email):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Account temporarily locked out due to multiple failed login attempts. Try again later.",
             )
 
-        creds = cls._credentials_by_email.get(email.lower())
         if not creds or not cls.verify_password(password, creds.password_hash):
             cls.record_failed_login(email)
             return None

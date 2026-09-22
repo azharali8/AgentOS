@@ -77,7 +77,7 @@ function eventToEntry(event: TaskEvent): ActivityEntry {
 
   let agent = payload.agent || eventType.replace(/_/g, ' ');
   let title = payload.message || payload.description || `${eventType}`;
-  let details = payload.details || payload.summary || '';
+  let details = payload.error || payload.details || payload.summary || '';
 
   // Prettify common event types
   if (eventType === 'TASK_STARTED') { agent = 'Supervisor'; title = 'Task started'; }
@@ -118,7 +118,7 @@ function taskToEntry(task: Task): ActivityEntry {
     iconColor: taskStatusColor(task.status),
     icon: Icon,
     title: shortInstruction,
-    details: `Status: ${task.status}${task.result_summary ? ` · ${task.result_summary.slice(0, 60)}` : ''}`,
+    details: `Status: ${task.status}${task.error ? ` · ${task.error}` : task.result_summary ? ` · ${task.result_summary}` : ''}`,
   };
 }
 
@@ -252,7 +252,7 @@ export const EvaluationCenterView: React.FC<EvaluationCenterViewProps> = ({ clie
                           {ev.agent}
                         </span>
                         {ev.details && (
-                          <span className="text-slate-500 truncate max-w-xs">{ev.details}</span>
+                          <details className="text-slate-500 max-w-full"><summary className="cursor-pointer">Details</summary><p className="whitespace-pre-wrap break-words mt-1">{ev.details}</p></details>
                         )}
                       </div>
                     </div>

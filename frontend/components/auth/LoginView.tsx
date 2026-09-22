@@ -1,160 +1,94 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Lock, Mail, Shield, ArrowRight, AlertCircle, Sparkles } from 'lucide-react';
-import { AgentOSClient } from '../../lib/api';
-import { UserProfile } from '../../types';
+import React, {useEffect, useState} from 'react';
+import Link from 'next/link';
+import {ArrowRight, ArrowUpRight, Check, Code2, Eye, EyeOff, GitBranch, Layers3, Loader2, LockKeyhole, Mail, ShieldCheck, Sparkles, Terminal, Workflow} from 'lucide-react';
+import {AgentOSClient} from '../../lib/api';
+import {authError} from '../../lib/auth-session';
+import {registrationPasswordError, registrationPasswordChecks} from '../../lib/registration-password';
+import {UserProfile} from '../../types';
 
 interface LoginViewProps {
-  onLoginSuccess: (token: string, user: UserProfile) => void;
+  onLoginSuccess: (token:string,user:UserProfile)=>void;
+  notice?:string;
+  onRetrySession?:()=>void;
 }
-
-export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
-  const [email, setEmail] = useState('azhar@agentos.local');
-  const [password, setPassword] = useState('agentos123');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
+export const LoginView:React.FC<LoginViewProps>=({onLoginSuccess,notice,onRetrySession})=>{
+  const [identifier,setIdentifier]=useState('');
+  const [password,setPassword]=useState('');
+  const [name,setName]=useState('');
+  const [visible,setVisible]=useState(false);
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState('');
+  const [message,setMessage]=useState('');
+  const [registration,setRegistration]=useState(false);
+  const [signup,setSignup]=useState(false);
+  const passwordChecks=registrationPasswordChecks(password);
+  useEffect(()=>{
+    let active=true;
+    new AgentOSClient().authOptions().then(options=>{if(active)setRegistration(options.registration_enabled);}).catch(()=>{});
+    return()=>{active=false;};
+  },[]);
+  const submit=async(e:React.FormEvent)=>{
+    e.preventDefault();if(loading)return;
+    if(signup){const passwordError=registrationPasswordError(password);if(passwordError){setError(passwordError);return;}}
+    setLoading(true);setError('');setMessage('');
     try {
-      const client = new AgentOSClient();
-      const res = await client.login(email, password);
-      onLoginSuccess(res.token, {
-        user_id: res.user_id,
-        username: res.username,
-        email: res.email,
-        role: res.role,
-        is_authenticated: true,
-      });
-    } catch (err: any) {
-      setError(err.message || 'Authentication failed. Please verify credentials.');
-    } finally {
-      setLoading(false);
-    }
+      const client=new AgentOSClient();
+      if(signup){
+        await client.register(identifier.trim(),name.trim(),password);
+        setSignup(false);setPassword('');setMessage('Your local account is ready. Sign in to open your workspace.');
+      } else {
+        const result=await client.login(identifier.trim(),password);
+        onLoginSuccess(result.token,{user_id:result.user_id,username:result.username,email:result.email,role:result.role,is_authenticated:true});
+      }
+    } catch(err){setError(authError(err));}
+    finally {setLoading(false);}
   };
-
-  const setPresetUser = (type: 'user' | 'admin') => {
-    if (type === 'admin') {
-      setEmail('admin@agentos.local');
-      setPassword('admin123');
-    } else {
-      setEmail('azhar@agentos.local');
-      setPassword('agentos123');
-    }
-    setError(null);
-  };
-
-  return (
-    <div className="min-h-screen bg-[#f8fafc] bg-grid-pattern flex flex-col justify-center items-center px-4 py-12 select-none text-slate-900 font-sans relative">
-      {/* Main Login Card */}
-      <div className="w-full max-w-md bg-white border border-slate-200/90 rounded-3xl p-8 shadow-[0_10px_40px_rgba(0,0,0,0.06)] relative z-10 space-y-6">
-        {/* Brand Header */}
-        <div className="text-center space-y-2">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 mx-auto flex items-center justify-center text-white shadow-sm shadow-indigo-500/30">
-            <Sparkles className="w-5 h-5" />
-          </div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-            AgentOS
-          </h1>
-          <p className="text-xs text-slate-500">
-            AI Software Engineering Operating System
-          </p>
-        </div>
-
-        {error && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center space-x-2.5 text-rose-700 text-xs">
-            <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {/* Login Form */}
-        <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-700 mb-1.5">
-              Email Address
-            </label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="developer@agentos.local"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-700 mb-1.5">
-              Password
-            </label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all"
-              />
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full mt-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-semibold text-xs flex items-center justify-center space-x-2 transition-all shadow-sm shadow-indigo-600/20"
-          >
-            <span>{loading ? 'Authenticating...' : 'Sign In to Workspace'}</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </form>
-
-        {/* Quick Profiles */}
-        <div className="pt-4 border-t border-slate-100 space-y-2 text-xs">
-          <span className="text-[11px] text-slate-400 font-medium block text-center">
-            Quick-access Workstation Profiles
-          </span>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setPresetUser('user')}
-              className={`p-2.5 rounded-xl border text-left transition-all ${
-                email === 'azhar@agentos.local'
-                  ? 'bg-indigo-50/70 border-indigo-300 text-indigo-900'
-                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              <span className="block font-bold text-[11px]">Azhar Ali</span>
-              <span className="text-[10px] text-slate-400 block truncate">Developer</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setPresetUser('admin')}
-              className={`p-2.5 rounded-xl border text-left transition-all ${
-                email === 'admin@agentos.local'
-                  ? 'bg-indigo-50/70 border-indigo-300 text-indigo-900'
-                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              <span className="block font-bold text-[11px]">Admin</span>
-              <span className="text-[10px] text-slate-400 block truncate">Security Root</span>
-            </button>
-          </div>
+  return <main className="auth-page">
+    <section className="auth-story" aria-labelledby="product-heading">
+      <Link href="/" className="auth-brand" aria-label="AgentOS home"><span className="auth-logo"><Sparkles size={21}/></span>AgentOS<span className="auth-brand-tag">ENGINEERING, ORCHESTRATED.</span></Link>
+      <div className="auth-story-content">
+        <p className="auth-eyebrow"><span/> YOUR IDEAS. A WHOLE ENGINEERING TEAM.</p>
+        <h1 id="product-heading">Build software.<br/>With a team<br/><span>that thinks ahead.</span></h1>
+        <p className="auth-description">One instruction. A coordinated workflow.<br className="hidden xl:block"/> AgentOS brings planning, coding, testing and review together — with you in control.</p>
+        <div className="auth-workflow" role="img" aria-label="Voice or text instructions reach the Supervisor, which coordinates planning, coding, testing and review.">
+          <div className="auth-workflow-top"><span><Terminal size={14}/> Voice or text instruction</span><span className="auth-workflow-label">THE WORKFLOW</span></div>
+          <div className="auth-connector"/>
+          <div className="auth-supervisor"><span className="auth-supervisor-icon"><Workflow size={25}/></span><div><strong>Supervisor</strong><p>Your direction. Coordinated execution.</p></div><span className="auth-supervisor-mark"><Sparkles size={16}/></span></div>
+          <div className="auth-branches"/>
+          <div className="auth-workflow-steps">{[{label:'Plan',icon:GitBranch},{label:'Code',icon:Code2},{label:'Test',icon:Check},{label:'Review',icon:ShieldCheck}].map(({label,icon:Icon})=><div key={label}><Icon size={18}/><span>{label}</span></div>)}</div>
+          <div className="auth-workflow-bottom"><Layers3 size={14}/><span>From an idea to reviewed software.</span></div>
         </div>
       </div>
-
-      <footer className="mt-8 text-center text-slate-400 text-xs space-y-1">
-        <p>Security Boundaries: Workspace Sandbox · SHA-256 Checksums · Rate Limiting</p>
-      </footer>
-    </div>
-  );
+      <div className="auth-story-footer"><span className="auth-footer-line"/><p>Built for the way engineers work.</p></div>
+    </section>
+    <section className="auth-entry" aria-labelledby="auth-heading">
+      <div className="auth-entry-top"><span className="auth-entry-dot"/> THE AGENTOS WORKSPACE</div>
+      <div className="auth-form-wrap">
+        <span className="auth-form-icon"><ArrowUpRight size={25}/></span>
+        <p className="auth-kicker">LET’S BUILD SOMETHING GREAT</p>
+        <h2 id="auth-heading">{signup?'Create your account.':'Welcome back.'}</h2>
+        <p className="auth-form-description">{signup?'Create a local account for this workspace.':'Sign in to pick up where your ideas left off.'}</p>
+        {(message||notice)&&<div className="auth-notice" role="status">{message||notice}{notice?.includes('verify')&&onRetrySession&&<button type="button" onClick={onRetrySession}>Retry connection</button>}</div>}
+        {error&&<div id="auth-error" className="auth-error" role="alert">{error}</div>}
+        <form onSubmit={submit} aria-busy={loading} className="auth-form">
+          {signup&&<div><label htmlFor="auth-name">Your name</label><div className="auth-input-wrap"><input id="auth-name" autoComplete="name" value={name} onChange={e=>setName(e.target.value)} required minLength={3} maxLength={60} disabled={loading} placeholder="How should we address you?"/></div></div>}
+          <div><label htmlFor="auth-identifier">{signup?'Email address':'Email or username'}</label><div className="auth-input-wrap"><Mail size={18} aria-hidden="true"/><input id="auth-identifier" type={signup?'email':'text'} autoComplete="username" value={identifier} onChange={e=>setIdentifier(e.target.value)} required maxLength={254} disabled={loading} placeholder={signup?'you@example.com':'Your email or username'} aria-invalid={!!error} aria-describedby={error?'auth-error':undefined}/></div></div>
+          <div><label htmlFor="auth-password">Password</label><div className="auth-input-wrap"><LockKeyhole size={18} aria-hidden="true"/><input id="auth-password" type={visible?'text':'password'} autoComplete={signup?'new-password':'current-password'} value={password} onChange={e=>{setPassword(e.target.value);setError('');}} required minLength={signup?undefined:1} maxLength={signup?undefined:1024} disabled={loading} placeholder={signup?'Create a password':'Enter your password'} aria-invalid={!!error || (signup && password.length > 0 && !!registrationPasswordError(password))} aria-describedby={signup?'auth-password-help':error?'auth-error':undefined}/><button type="button" aria-label={visible?'Hide password':'Show password'} aria-pressed={visible} disabled={loading} onClick={()=>setVisible(!visible)}>{visible?<EyeOff size={18}/>:<Eye size={18}/>}</button></div></div>
+          {signup&&<div id="auth-password-help" className="auth-password-help" aria-live="polite" aria-atomic="true">
+            <div className="auth-password-help-heading"><strong>Password requirements</strong><span>{passwordChecks.count}/20 characters</span></div>
+            <p data-met={passwordChecks.length}><span aria-hidden="true">{passwordChecks.length?'✓':'○'}</span> 8–20 characters{passwordChecks.length?' — met':''}</p>
+            <p data-met={passwordChecks.special}><span aria-hidden="true">{passwordChecks.special?'✓':'○'}</span> At least one special character, e.g. ! @ # ${passwordChecks.special?' — met':''}</p>
+            {password.length>0&&<p className="auth-password-feedback">{passwordChecks.length&&passwordChecks.special?'Your password meets the requirements.':passwordChecks.count<8?`Add ${8-passwordChecks.count} more character${8-passwordChecks.count===1?'':'s'} to reach the minimum.`:passwordChecks.count>20?'Use no more than 20 characters.':'Add a special character such as !, @, # or $.'}</p>}
+          </div>}
+          {signup&&<p className="auth-local-note">Local accounts last for this server session. Durable accounts and email recovery are not available yet.</p>}
+          <button className="auth-submit" type="submit" disabled={loading}>{loading?<><Loader2 className="animate-spin motion-reduce:animate-none" size={18}/>{signup?'Creating your account…':'Signing you in…'}</>:<>{signup?'Create local account':'Open your workspace'}<ArrowRight size={18}/></>}</button>
+        </form>
+        {registration?<p className="auth-switch">{signup?'Already have an account?':'New to this workspace?'} <button disabled={loading} onClick={()=>{setSignup(!signup);setError('');setMessage('');setPassword('');setVisible(false);}}>{signup?'Sign in':'Create account'}</button></p>:<p className="auth-switch">Use the account provided by your workspace administrator.</p>}
+        <div className="auth-assurance"><ShieldCheck size={16}/><span>Your workspace. Your permissions. Your control.</span></div>
+      </div>
+      <footer className="auth-entry-footer"><span>AgentOS</span><span>AI Software Engineering Platform</span></footer>
+    </section>
+  </main>;
 };

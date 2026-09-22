@@ -14,6 +14,10 @@ import {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+export class ApiError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
 export class AgentOSClient {
   private apiKey?: string;
 
@@ -42,7 +46,10 @@ export class AgentOSClient {
         const json = JSON.parse(errorText);
         if (json.detail) message = json.detail;
       } catch {}
-      throw new Error(`API Error (${res.status}): ${message}`);
+      if (res.status === 401 && this.apiKey && typeof window !== 'undefined' && localStorage.getItem('agentos_token') === this.apiKey) {
+        window.dispatchEvent(new Event('agentos:session-expired'));
+      }
+      throw new ApiError(res.status, `API Error (${res.status}): ${message}`);
     }
 
     return res.json();
@@ -53,18 +60,26 @@ export class AgentOSClient {
     return this.request<LoginResponse>('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
+      signal: AbortSignal.timeout(15000),
     });
   }
 
   async getProfile(): Promise<UserProfile> {
-    return this.request<UserProfile>('/api/v1/auth/me');
+    return this.request<UserProfile>('/api/v1/auth/me', {signal: AbortSignal.timeout(15000)});
   }
 
   async logout(): Promise<void> {
-    try {
-      await this.request('/api/v1/auth/logout', { method: 'POST' });
-    } catch {}
+    await this.request('/api/v1/auth/logout', {method:'POST', signal:AbortSignal.timeout(15000)});
   }
+  async authOptions(): Promise<{registration_enabled:boolean}> {
+    return this.request('/api/v1/auth/options', {cache:'no-store', signal:AbortSignal.timeout(10000)});
+  }
+  async register(email:string, username:string, password:string): Promise<void> {
+    await this.request('/api/v1/auth/register', {method:'POST',body:JSON.stringify({email,username,password}),signal:AbortSignal.timeout(15000)});
+  }
+
+  async localModels(): Promise<LocalModels> { return this.request('/api/v1/system/local-models',{cache:'no-store',signal:AbortSignal.timeout(30000)}); }
+  async selectLocalModel(model:string): Promise<LocalModels> { return this.request('/api/v1/system/local-models',{method:'PUT',body:JSON.stringify({model}),signal:AbortSignal.timeout(30000)}); }
 
   // System & Models
   async getHealth(): Promise<SystemHealth> {
@@ -87,7 +102,7 @@ export class AgentOSClient {
   async createTask(
     task: string,
     priority: number = 1,
-    options: { requested_agent?: string; execution_mode?: string; sync?: boolean } = {}
+    options: { requested_agent?: string; execution_mode?: string; sync?: boolean; attachments?: {name:string;content:string}[] } = {}
   ): Promise<Task> {
     return this.request<Task>('/api/v1/tasks', {
       method: 'POST',
@@ -97,12 +112,23 @@ export class AgentOSClient {
         requested_agent: options.requested_agent,
         execution_mode: options.execution_mode || 'autonomous',
         sync: options.sync ?? false,
+        context: {attachments: options.attachments ?? []},
       }),
     });
   }
 
   async listTasks(limit: number = 50, offset: number = 0): Promise<Task[]> {
     return this.request<Task[]>(`/api/v1/tasks?limit=${limit}&offset=${offset}`);
+  }
+
+  openVoiceStream(sessionId: string, mode: 'once'|'live' = 'live'): WebSocket {
+    const url = new URL('/api/v1/voice/stream', API_BASE);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(url);
+    socket.addEventListener('open', () => socket.send(JSON.stringify({
+      type: 'Start', session_id: sessionId, token: this.apiKey, mode,
+    })));
+    return socket;
   }
 
   async getTask(taskId: string): Promise<Task> {
@@ -164,6 +190,12 @@ export class AgentOSClient {
     return this.request<any>('/api/v1/workspace/set-root', {
       method: 'POST',
       body: JSON.stringify({ path, name }),
+    });
+  }
+
+  async disconnectWorkspace(): Promise<any> {
+    return this.request<any>('/api/v1/workspace/disconnect', {
+      method: 'POST',
     });
   }
 
@@ -300,3 +332,5 @@ export class AgentOSClient {
   }
 }
 
+
+export interface LocalModels { models: {name:string;cloud?:boolean;size:number;selectable:boolean;status:string;recommended:boolean}[]; active_model:string; provider:string; status:string; selection_enabled:boolean; }

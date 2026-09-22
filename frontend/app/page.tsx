@@ -1,60 +1,35 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Sidebar } from '../components/Sidebar';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { LoginView } from '../components/auth/LoginView';
+import { useAuthSession } from '../hooks/useAuthSession';
 import { DashboardView } from '../components/DashboardView';
-import { TaskCenterView } from '../components/TaskCenterView';
-import { TaskExecutionView } from '../components/TaskExecutionView';
-import { EvaluationCenterView } from '../components/EvaluationCenterView';
-import { WorkspaceView } from '../components/workspace/WorkspaceView';
-import { ApprovalCenterView } from '../components/approvals/ApprovalCenterView';
-import { ObservabilityView } from '../components/observability/ObservabilityView';
-import { SecurityCenterView } from '../components/security/SecurityCenterView';
-import { SystemHealthView } from '../components/system/SystemHealthView';
-import { VoiceControl } from '../components/voice/VoiceControl';
+import { SettingsView } from '../components/SettingsView';
+import { useWorkspaceSettings } from '../hooks/useWorkspaceSettings';
 import { AgentOSClient } from '../lib/api';
-import { Task, AgentDefinition, UserProfile, UserRole, ModelsStatusResponse } from '../types';
-import { useTaskEventStream } from '../hooks/useTaskEventStream';
-import {
-  Search,
-  GitBranch,
-  Bell,
-  Sparkles,
-  Layers,
-  ChevronDown,
-  CheckCircle2,
-  FolderGit2,
-  User,
-} from 'lucide-react';
+import { Task, AgentDefinition, ModelsStatusResponse } from '../types';
+import { Sparkles, ArrowLeft } from 'lucide-react';
 
 export default function Home() {
-  const [token, setToken] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
-  const [activeTab, setActiveTab] = useState('workspace');
+  const { token, user: currentUser, checking, notice, login: handleLoginSuccess, logout: handleSignOut, refresh } = useAuthSession();
+  const [activeTab, setActiveTab] = useState<'workspace' | 'settings'>('workspace');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [modelsStatus, setModelsStatus] = useState<ModelsStatusResponse | null>(null);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [benchmarks, setBenchmarks] = useState<any | null>(null);
-  const [isEvaluating, setIsEvaluating] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
 
-  // Initialize with session token from localStorage if present
+  // Reset to workspace on token change
   useEffect(() => {
-    const savedToken = localStorage.getItem('agentos_token');
-    const savedUser = localStorage.getItem('agentos_user');
-    if (savedToken && savedUser) {
-      try {
-        setToken(savedToken);
-        setCurrentUser(JSON.parse(savedUser));
-      } catch {}
-    }
-  }, []);
+    setTasks([]);
+    setAgents([]);
+    setModelsStatus(null);
+    setActiveTab('workspace');
+  }, [token]);
 
   const client = useMemo(() => new AgentOSClient(token || undefined), [token]);
+  const preferences = useWorkspaceSettings(client, !!token);
 
-  const { events: streamEvents, isConnected: isStreaming } = useTaskEventStream(selectedTaskId, token);
+  const currentToken = useRef(token);
+  currentToken.current = token;
 
   const loadData = async () => {
     if (!token) return;
@@ -64,11 +39,12 @@ export default function Home() {
         client.listAgents(),
         client.getModels().catch(() => null),
       ]);
+      if (currentToken.current !== token) return;
       setTasks(fetchedTasks);
       setAgents(fetchedAgents);
       setModelsStatus(fetchedModels);
     } catch (err) {
-      console.error('Failed to load AgentOS telemetry:', err);
+      console.error('Failed to load AgentOS data:', err);
     }
   };
 
@@ -80,218 +56,70 @@ export default function Home() {
     }
   }, [token]);
 
-  const handleLoginSuccess = (newToken: string, user: UserProfile) => {
-    const normalizedUser: UserProfile = {
-      ...user,
-      role: (user.role?.toUpperCase() ?? 'USER') as UserRole,
-    };
-    setToken(newToken);
-    setCurrentUser(normalizedUser);
-    localStorage.setItem('agentos_token', newToken);
-    localStorage.setItem('agentos_user', JSON.stringify(normalizedUser));
-  };
-
-  const handleSignOut = async () => {
-    if (client) {
-      await client.logout().catch(() => {});
-    }
-    setToken(null);
-    setCurrentUser(null);
-    localStorage.removeItem('agentos_token');
-    localStorage.removeItem('agentos_user');
-  };
-
-  const handleCreateTask = async (
-    instruction: string,
-    priority: number,
-    options?: { requested_agent?: string; execution_mode?: string }
-  ) => {
-    const newTask = await client.createTask(instruction, priority, options);
-    await loadData();
-    setSelectedTaskId(newTask.task_id);
-    setActiveTab('execution');
-  };
-
-  const handleCancelTask = async (taskId: string) => {
-    await client.cancelTask(taskId);
-    await loadData();
-  };
-
-  const handleResolveApproval = async (approvalId: string, approved: boolean) => {
-    await client.resolveApproval(approvalId, approved);
-    await loadData();
-  };
-
-  const handleInvokeAgent = async (agentId: string, instruction: string) => {
-    return client.invokeAgent(agentId, instruction);
-  };
-
-  const handleRunBenchmarks = async () => {
-    setIsEvaluating(true);
-    try {
-      const res = await client.getEvaluations();
-      setBenchmarks(res);
-    } catch (err) {
-      console.error('Failed to execute benchmark battery:', err);
-    } finally {
-      setIsEvaluating(false);
-    }
-  };
-
-  // If not authenticated, render Login Gate
-  if (!token || !currentUser) {
-    return <LoginView onLoginSuccess={handleLoginSuccess} />;
+  // Loading screen
+  if (checking) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-[#fcfdfd] text-slate-600" role="status" aria-live="polite">
+        <div className="text-center">
+          <Sparkles className="mx-auto mb-4 h-8 w-8 text-indigo-600 animate-pulse motion-reduce:animate-none" />
+          <p className="text-sm font-medium">Opening your workspace…</p>
+        </div>
+      </main>
+    );
   }
 
-  const selectedTask = tasks.find((t) => t.task_id === selectedTaskId);
-  const userRole: UserRole = currentUser.role;
+  // Login gate
+  if (!token || !currentUser) {
+    return <LoginView onLoginSuccess={handleLoginSuccess} notice={notice} onRetrySession={refresh} />;
+  }
 
   return (
-    <div className="flex h-screen bg-[#f8fafc] overflow-hidden text-slate-900 font-sans">
-      {/* Left Sidebar Navigation */}
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={(tab) => {
-          if (tab !== 'execution') setSelectedTaskId(null);
-          setActiveTab(tab);
-        }}
-        currentUser={currentUser}
-        onSignOut={handleSignOut}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
-        {/* Top Header Bar (Matching PDF Pages 1-9) */}
-        <header className="h-14 bg-white border-b border-slate-200/90 px-6 flex items-center justify-between z-10 shrink-0 select-none">
-          {/* Breadcrumb / Workspace Context */}
-          <div className="flex items-center space-x-2 text-xs">
-            <span className="font-semibold text-slate-700">AgentOS</span>
-            <span className="text-slate-400">&gt;</span>
-            <span className="font-semibold text-slate-700 capitalize">
-              {activeTab === 'execution' ? 'Task Execution' : activeTab}
-            </span>
-          </div>
-
-          {/* Global Search & System Status */}
-          <div className="flex items-center space-x-3">
-            {/* Current View Pill */}
-            <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-xl text-xs font-medium capitalize">
-              {activeTab === 'execution' ? 'Tasks' : activeTab}
-            </span>
-
-            {/* Compact Header Voice Input */}
-            <VoiceControl
-              client={client}
-              key={token}
-              compact={true}
-              onTaskCreated={(taskId) => {
-                setSelectedTaskId(taskId);
-                setActiveTab('execution');
-                loadData();
-              }}
-            />
-
-            {/* Bell Notifications */}
+    <div className="workspace-shell flex h-screen overflow-hidden theme-bg-canvas theme-text-primary font-sans">
+      {activeTab === 'workspace' ? (
+        <div className="flex-1 h-screen overflow-hidden">
+          <DashboardView
+            client={client}
+            tasks={tasks}
+            preferences={preferences}
+            agents={agents}
+            currentUser={currentUser}
+            onRefresh={loadData}
+            onSelectTask={() => {}}
+            onNewTaskClick={() => {}}
+            onDirectCreateTask={async (instruction, priority, options) => {
+              await client.createTask(instruction, priority, options);
+              await loadData();
+            }}
+            onNavigateTab={(tab) => {
+              if (tab === 'settings') setActiveTab('settings');
+            }}
+            onOpenSettings={() => setActiveTab('settings')}
+            onSignOut={handleSignOut}
+          />
+        </div>
+      ) : (
+        <div className="flex-1 h-screen flex flex-col theme-bg-canvas overflow-hidden">
+          {/* Settings Minimal Top Header */}
+          <header className="h-13 px-6 border-b theme-border theme-bg-surface flex items-center justify-between z-10 shrink-0">
             <button
-              onClick={() => setActiveTab('artifacts')}
-              className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-colors"
-              title="Approvals" aria-label="Open approvals"
+              onClick={() => setActiveTab('workspace')}
+              className="flex items-center space-x-2 text-xs font-semibold theme-text-muted hover:theme-text-primary transition-colors"
             >
-              <Bell className="w-4 h-4" />
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back to Workspace</span>
             </button>
+            <span className="text-xs font-bold theme-text-primary">AgentOS Settings</span>
+          </header>
 
-            {/* User Profile Avatar Icon */}
-            <button
-              onClick={handleSignOut}
-              title={`Signed in as ${currentUser?.username ?? 'User'} · Click to sign out`}
-              className="w-7 h-7 rounded-xl bg-indigo-600 text-white flex items-center justify-center text-xs font-bold shadow-xs hover:bg-indigo-700 transition-colors"
-            >
-              <User className="w-4 h-4" />
-            </button>
-          </div>
-        </header>
-
-        {/* Viewport Scrollable Area */}
-        <main className="flex-1 overflow-y-auto p-8 bg-grid-pattern">
-          {activeTab === 'workspace' && (
-            <DashboardView
-              client={client}
-              tasks={tasks}
-              agents={agents}
-              currentUser={currentUser}
-              onRefresh={loadData}
-              onSelectTask={(id) => {
-                setSelectedTaskId(id);
-                setActiveTab('execution');
-              }}
-              onNewTaskClick={() => setActiveTab('tasks')}
-              onDirectCreateTask={handleCreateTask}
-              onNavigateTab={(tab) => setActiveTab(tab)}
+          <main className="flex-1 overflow-y-auto p-6 md:p-10">
+            <SettingsView
+              user={currentUser}
+              onSignOut={handleSignOut}
+              preferences={preferences}
             />
-          )}
-
-          {activeTab === 'repository' && (
-            <WorkspaceView
-              client={client}
-              onTaskCreated={(taskId) => {
-                setSelectedTaskId(taskId);
-                setActiveTab('execution');
-                loadData();
-              }}
-            />
-          )}
-
-          {activeTab === 'tasks' && (
-            <TaskCenterView
-              tasks={tasks}
-              agents={agents}
-              onCreateTask={handleCreateTask}
-              onSelectTask={(id) => {
-                setSelectedTaskId(id);
-                setActiveTab('execution');
-              }}
-              onCancelTask={handleCancelTask}
-            />
-          )}
-
-          {activeTab === 'execution' && (
-            selectedTask ? (
-              <TaskExecutionView
-                task={selectedTask}
-                events={streamEvents}
-                isStreaming={isStreaming}
-                onBack={() => {
-                  setSelectedTaskId(null);
-                  setActiveTab('tasks');
-                }}
-                onResolveApproval={handleResolveApproval}
-              />
-            ) : (
-              <div className="max-w-2xl mx-auto py-16 text-center space-y-4 bg-white rounded-3xl border border-slate-200/90 p-8 shadow-2xs">
-                <p className="text-sm font-semibold text-slate-700">No task selected for execution.</p>
-                <button
-                  onClick={() => setActiveTab('tasks')}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold"
-                >
-                  Go to Tasks
-                </button>
-              </div>
-            )
-          )}
-
-          {activeTab === 'artifacts' && (
-            <ApprovalCenterView client={client} userRole={userRole} />
-          )}
-
-          {activeTab === 'activity' && (
-            <EvaluationCenterView client={client} />
-          )}
-
-          {activeTab === 'operations' && <ObservabilityView client={client} />}
-
-          {activeTab === 'settings' && <SystemHealthView client={client} />}
-        </main>
-      </div>
+          </main>
+        </div>
+      )}
     </div>
   );
 }

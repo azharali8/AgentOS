@@ -63,13 +63,19 @@ class TaskDecomposer:
         """Decompose instruction into validated SubTasks with cycle checks."""
         # Narrow operational requests have an unambiguous worker; never let a
         # generic fallback turn 'run tests' into an unsolicited coding task.
-        import re
-        if re.match(r"^(run|execute) (the |full )*(tests|test suite)\b", instruction.strip(), re.I):
-            return [SubTask(task_id=task_id, subtask_id="run-tests", description=instruction,
-                            assigned_agent=AgentType.TESTING)]
-        if instruction.startswith("Diagnose the most recent test failures and provide a fix recommendation."):
-            return [SubTask(task_id=task_id, subtask_id="diagnose", description=instruction,
-                            assigned_agent=AgentType.DEBUGGER)]
+        from backend.app.services.engineering_intent import engineering_intent
+        intent = engineering_intent(instruction)
+        if intent in ("test", "diagnose", "fix"):
+            steps = [("run-tests", AgentType.TESTING, "Run tests and preserve actual failure evidence")]
+            if intent in ("diagnose", "fix"):
+                steps.append(("diagnose", AgentType.DEBUGGER, "Explain the observed test failures and recommend a grounded fix"))
+            if intent == "fix":
+                steps.extend([("fix", AgentType.CODING, instruction),
+                              ("retest", AgentType.TESTING, "Run the full suite after the approved fix"),
+                              ("review", AgentType.REVIEWER, "Review the fix and actual retest evidence")])
+            return [SubTask(task_id=task_id, subtask_id=key, description=description,
+                            assigned_agent=agent, dependencies=[steps[i-1][0]] if i else [])
+                    for i, (key, agent, description) in enumerate(steps)]
         prompt = f"{MULTI_AGENT_DECOMPOSE_PROMPT}\n{instruction.strip()}"
         try:
             from backend.app.llm.structured import generate_structured

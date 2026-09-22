@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 
 class MultiAgentState(TypedDict, total=False):
+    selected_model: Optional[str]
     task_id: str
     user_instruction: str
     thread_id: str

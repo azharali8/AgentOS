@@ -299,28 +299,64 @@ class SupervisorAgent:
                     content=res.evidence,
                 )
             elif agent_type == AgentType.DEBUGGER:
-                test_res = self.debugger_agent.run_tests()
-                data_dict = test_res.get("data") if isinstance(test_res, dict) else None
+                # Diagnose the observed run, not a fresh run which may differ.
+                sources = [v for v in subtask.input_data.values() if isinstance(v, dict) and v.get("agent_type") == AgentType.TESTING.value]
+                sources += subtask.input_data.get("failure_history", [])
+                source = sources[-1] if sources else None
+                if source:
+                    from backend.app.services.engineering_intent import valid_test_result
+                    if not valid_test_result(source):
+                        raise RuntimeError("WORKFLOW_ERROR: no valid test execution to diagnose")
+                    data_dict = source["evidence"]["test_results"]
+                    test_res = {"success": True, "data": data_dict}
+                else:
+                    test_res = self.debugger_agent.run_tests()
+                    data_dict = test_res.get("data") if isinstance(test_res, dict) else None
                 passed = data_dict.get("passed", False) if isinstance(data_dict, dict) else False
 
                 
                 from backend.app.agents.failure_analyzer import FailureAnalyzerAgent
                 from backend.app.models.coding import InvestigationResult
+                from backend.app.llm.evidence import failure_excerpt
                 data = data_dict or {}
                 failures = FailureAnalyzerAgent(llm_provider=self.llm).analyze(data.get("stdout", ""), data.get("stderr", ""))
+                from backend.app.services.test_service import TestService
+                structured_report = TestService.parse_test_report(data)
+                def workspace_sources(paths):
+                    from backend.app.services.workspace_service import WorkspaceService
+                    valid = []
+                    for candidate in paths:
+                        try:
+                            path = WorkspaceService.validate_path(candidate)
+                            if path.is_file():
+                                valid.append(path.relative_to(WorkspaceService.get_workspace_root()).as_posix())
+                        except ValueError:
+                            # Tracebacks contain library frames. Preserve them as
+                            # evidence, never promote them to mutation targets.
+                            continue
+                    return list(dict.fromkeys(valid))
+                issue_files = [i["test_file"] for i in structured_report.get("issues", []) if i.get("test_file")]
+                if issue_files:
+                    subtask.target_files = workspace_sources(subtask.target_files + issue_files)
                 if subtask.input_data.get("changed_files"):
-                    subtask.target_files = subtask.input_data["changed_files"]
+                    subtask.target_files = list(dict.fromkeys(subtask.target_files + subtask.input_data["changed_files"]))
                 investigation = InvestigationResult(
                     affected_files=subtask.target_files or [],
                     evidence=f"Exit code: {data.get('exit_code')}; counts: {data.get('counts')}\n"
+                             + failure_excerpt(data.get("stdout", "")) + "\n"
                              + str(data.get("stderr", ""))[:800]
                              + "\nSource context: " + str(self.research_agent.execute(subtask).evidence)[:10000],
                 )
                 actual = self.debugger_agent.diagnose(failures, investigation)
+                captured_output = str(data.get("stdout", "")) + "\n" + str(data.get("stderr", ""))
+                observed_symptoms = list(dict.fromkeys(
+                    i.get("message", "").strip() for i in structured_report.get("issues", [])
+                    if i.get("message", "").strip() and i["message"].strip() in captured_output
+                ))
                 diagnosis = DiagnosisReport(
-                    symptoms=["Test failure detected" if not passed else "Diagnostics probe run"],
-                    suspected_files=subtask.target_files or [],
-                    root_cause=actual.root_cause,
+                    symptoms=observed_symptoms or [f"Test process exited with code {data.get('exit_code')}"],
+                    suspected_files=workspace_sources(actual.affected_files + (subtask.target_files or [])),
+                    root_cause=actual.root_cause + "\n" + actual.explanation,
                     suggested_fix=actual.recommended_fix,
                     confidence_score=actual.confidence,
                 )
@@ -335,7 +371,7 @@ class SupervisorAgent:
                     agent_type=AgentType.DEBUGGER,
                     status=AgentStatus.COMPLETED if test_res.get("success") else AgentStatus.FAILED,
                     summary=f"Debugger completed root cause diagnosis (root_cause='{diagnosis.root_cause}').",
-                    evidence={"test_res": test_res, "diagnosis": diagnosis.model_dump()},
+                    evidence={"test_res": test_res, "structured_report": structured_report, "diagnosis": diagnosis.model_dump()},
                 )
             elif agent_type == AgentType.REVIEWER:
                 review_sources = SubTask(task_id=subtask.task_id, subtask_id=subtask.subtask_id,
@@ -423,7 +459,8 @@ class SupervisorAgent:
                 agent_type=agent_type,
                 status=AgentStatus.FAILED,
                 summary=f"Execution exception: {exc}",
-                error=str(exc),
+                error=(str(exc) if "_ERROR" in str(exc) else ("TARGET_VALIDATION_ERROR: " if "target" in str(exc).lower() or "workspace" in str(exc).lower() or "sensitive" in str(exc).lower() or "traversal" in str(exc).lower() else "WORKFLOW_ERROR: ") + str(exc)),
+                evidence={"error_type": "MODEL_OUTPUT_ERROR" if "MODEL_OUTPUT_ERROR" in str(exc) else "TARGET_VALIDATION_ERROR" if "target" in str(exc).lower() or "workspace" in str(exc).lower() or "sensitive" in str(exc).lower() or "traversal" in str(exc).lower() else "WORKFLOW_ERROR"},
             )
         finally:
             ConcurrencyManager.release_agent_slot(agent_type)
@@ -443,6 +480,13 @@ class SupervisorAgent:
             f"Files Modified: {aggregated.get('files_modified', [])}\n"
             f"Conflicts Detected: {len(aggregated.get('conflicts', []))}\n"
         )
+        for result in aggregated.get("evidence", {}).values():
+            evidence = result.get("evidence", {})
+            if result.get("agent") == AgentType.TESTING.value:
+                summary_text += "\n" + result.get("summary", "")
+            if evidence.get("diagnosis"):
+                diagnosis = evidence["diagnosis"]
+                summary_text += "\n" + diagnosis.get("root_cause", "") + "\nSuggested fix: " + diagnosis.get("suggested_fix", "")
         ArtifactService.save(
             task_id=task_id,
             agent_id="supervisor",

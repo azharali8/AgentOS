@@ -96,6 +96,8 @@ class ContextEngine:
             try:
                 read_res = self.intelligence.reader.read(rel_path, start_line=1, end_line=60)
                 content_str = "\n".join(read_res.lines) if read_res.lines else ""
+                from backend.app.services.event_service import EventService
+                EventService.record_event(task_id, "FILE_READ", payload={"path": rel_path, "agent": "supervisor"})
                 if rel_path.endswith(".py"):
                     syms = self.intelligence.extract_file_symbols(rel_path)
                     sym_names = [s["name"] for s in syms.get("symbols", [])]

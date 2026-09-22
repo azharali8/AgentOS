@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
 import logging
 import time
@@ -36,6 +38,8 @@ async def lifespan(app: FastAPI):
     from backend.app.db.database import init_db
     try:
         init_db()
+        from backend.app.services.local_model_settings import restore_model_preference
+        restore_model_preference()
     except Exception as exc:
         logger.error("Database initialization failed on startup: %s", exc)
         raise
@@ -51,9 +55,25 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AgentOS", version="0.3.0", lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    # Auth validation must never echo submitted passwords or other credentials.
+    if request.url.path.startswith('/api/v1/auth/'):
+        if request.url.path == '/api/v1/auth/register' and any(
+            error['loc'] == ('body', 'password') and error['type'] in ('string_too_short', 'string_too_long', 'value_error')
+            for error in exc.errors()
+        ):
+            from backend.app.auth.service import REGISTRATION_PASSWORD_MESSAGE
+            return JSONResponse(status_code=422, content={'detail': REGISTRATION_PASSWORD_MESSAGE})
+        return JSONResponse(status_code=422, content={'detail': 'Please check your account details'})
+    return await request_validation_exception_handler(request, exc)
+
+
 app.add_middleware(CorrelationMiddleware)
 
-# CORS configuration – allow local development origins only
+# CORS configuration â€“ allow local development origins only
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
@@ -85,7 +105,7 @@ app.include_router(v1_router)
 @app.get("/health")
 def liveness_check():
     """
-    Liveness probe — verifies the process is alive and responsive.
+    Liveness probe â€” verifies the process is alive and responsive.
     Does NOT check external dependencies. Used by Docker/K8s to decide
     whether to restart the container.
     """
@@ -99,7 +119,7 @@ def liveness_check():
 @app.get("/ready")
 def readiness_check():
     """
-    Readiness probe — verifies all critical subsystems are healthy before accepting traffic.
+    Readiness probe â€” verifies all critical subsystems are healthy before accepting traffic.
     Checks: database integrity, workspace directory, model router availability.
     Returns HTTP 503 if any subsystem is not ready.
     """
@@ -157,4 +177,3 @@ def readiness_check():
 @app.get("/")
 def read_root():
     return {"message": "AgentOS is running", "version": "0.3.0"}
-

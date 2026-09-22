@@ -139,3 +139,7 @@ async def synthesize_text(
 ) -> TTSResponse:
     """Synthesize text into speech or browser voice instructions."""
     return await VoiceService.synthesize_speech(text=req.text, voice=req.voice)
+
+# AssemblyAI streaming is the primary browser voice path; REST endpoints remain available.
+from backend.app.voice.streaming import stream_voice
+router.add_api_websocket_route("/stream", stream_voice)

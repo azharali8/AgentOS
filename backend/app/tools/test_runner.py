@@ -79,6 +79,7 @@ class TestRunResult:
     stdout: str
     stderr: str
     duration_seconds: float
+    command: str = ""
     timed_out: bool = False
     error: Optional[str] = None
     # Parsed counts (best-effort; None if not parseable)
@@ -264,17 +265,13 @@ class TestRunnerTool(BaseTool):
                 error=f"Unexpected error in test.run ({framework}): {exc}",
             )
 
-        if run_result.error:
-            return ToolResult(
-                tool_name=self.metadata.name,
-                success=False,
-                error=run_result.error,
-            )
-
         return ToolResult(
             tool_name=self.metadata.name,
-            success=True,
+            success=not bool(run_result.error),
+            error=run_result.error,
             data={
+                "command": run_result.command,
+                "error": run_result.error,
                 "framework": run_result.framework,
                 "path": run_result.path,
                 "exit_code": run_result.exit_code,
@@ -344,6 +341,7 @@ class TestRunnerTool(BaseTool):
             return TestRunResult(
                 framework="pytest",
                 path=path,
+                command=subprocess.list2cmdline(cmd),
                 exit_code=result.returncode,
                 stdout=stdout,
                 stderr=stderr,
@@ -389,6 +387,7 @@ class TestRunnerTool(BaseTool):
             return TestRunResult(
                 framework="npm",
                 path=None,
+                command=subprocess.list2cmdline(cmd),
                 exit_code=result.returncode,
                 stdout=result.stdout[:settings.MAX_OUTPUT_SIZE],
                 stderr=result.stderr[:4096],

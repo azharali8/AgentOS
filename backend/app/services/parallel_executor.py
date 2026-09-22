@@ -69,10 +69,13 @@ class ParallelExecutor:
                             error=str(exc),
                         )
 
+        from backend.app.services.engineering_intent import failed_test_result
         EventService.record_event(
             task_id=task_id,
-            event_type="PARALLEL_EXECUTION_COMPLETED",
-            payload={"completed_subtasks": list(results.keys())},
+            event_type="PARALLEL_EXECUTION_FAILED" if any(r.status != AgentStatus.COMPLETED and not failed_test_result(r) for r in results.values()) else "PARALLEL_EXECUTION_COMPLETED",
+            payload={"completed_subtasks": [key for key, r in results.items() if r.status == AgentStatus.COMPLETED],
+                     "test_failures": [key for key, r in results.items() if failed_test_result(r)],
+                     "failed_subtasks": [key for key, r in results.items() if r.status != AgentStatus.COMPLETED and not failed_test_result(r)]},
         )
         return results
 

@@ -132,9 +132,34 @@ class CodingAgent:
         """Create a candidate Patch object based on diagnosis or instruction."""
         import difflib
         import uuid
+        from backend.app.llm.evidence import failure_excerpt
         from backend.app.security.sensitive_files import is_sensitive_path
 
         targets = subtask.target_files or self.intelligence.get_first_workspace_files(max_files=3)
+        for value in (diagnosis_evidence or {}).values():
+            if isinstance(value, dict):
+                diagnosis = value.get("evidence", {}).get("diagnosis", {})
+                targets = list(dict.fromkeys(targets + diagnosis.get("suspected_files", [])))
+        # Include directly imported workspace modules so test repairs retain the
+        # real system under test. Never read installed libraries as patch targets.
+        import ast
+        for target in list(targets)[:settings.MAX_PATCH_FILES]:
+            if is_sensitive_path(target):
+                raise ValueError("Sensitive files cannot be sent to the coding model")
+            path = WorkspaceService.validate_path(target)
+            if path.suffix != ".py" or not path.is_file() or path.stat().st_size > settings.MAX_FILE_SIZE:
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                    candidate = node.module.replace(".", "/") + ".py"
+                    if candidate not in targets and len(targets) < settings.MAX_PATCH_FILES:
+                        resolved = WorkspaceService.validate_path(candidate)
+                        if resolved.is_file() and not is_sensitive_path(candidate):
+                            targets.append(candidate)
         originals = {}
         for target in targets[:settings.MAX_PATCH_FILES]:
             if is_sensitive_path(target):
@@ -143,9 +168,14 @@ class CodingAgent:
             if path.is_file():
                 if path.stat().st_size > settings.MAX_FILE_SIZE:
                     raise ValueError(f"File exceeds coding context limit: {target}")
+                target = path.relative_to(WorkspaceService.get_workspace_root()).as_posix()
                 originals[target] = path.read_text(encoding="utf-8")
+                from backend.app.services.event_service import EventService
+                EventService.record_event(subtask.task_id, "FILE_READ", payload={"path": target, "agent": "coding", "subtask_id": subtask.subtask_id})
                 if sum(len(text) for text in originals.values()) > 64000:
                     raise ValueError("Coding context exceeds the bounded file budget; narrow the task")
+
+        originals_by_path = {WorkspaceService.validate_path(name): content for name, content in originals.items()}
 
         dependencies = {}
         for key, value in (diagnosis_evidence or {}).items():
@@ -161,7 +191,7 @@ class CodingAgent:
             dependencies[key] = {
                 "status": value.get("status"), "summary": value.get("summary"), "error": value.get("error"),
                 "diagnosis": evidence.get("diagnosis"),
-                "test_stdout": str(test_data.get("stdout", ""))[-2000:],
+                "test_stdout": failure_excerpt(test_data.get("stdout", "")),
                 "test_stderr": str(test_data.get("stderr", ""))[-1000:],
             }
         context = {
@@ -183,22 +213,23 @@ class CodingAgent:
             "Implement the instruction using the supplied repository context. Return JSON only: "
             '{"files": [{"path": "relative/path", "content": "complete updated file contents"}]}. '
             "Include new files and tests needed by the instruction. Preserve unrelated content. "
-            "Fulfill EVERY requirement of original_user_request, even if the subtask description is abbreviated. "
-            "Do not return placeholders, simulated features, TODO implementations or demo-only security. "
-            "Authentication must verify unforgeable credentials/tokens and store salted password hashes, never plaintext passwords or token prefixes as proof. "
-            "HTTP endpoints must perform the requested behavior, not return a description of that behavior. "
-            "Build application URLs from the incoming request, never from hardcoded test hostnames. "
-            "Keep small applications compact; avoid duplicate implementations and unnecessary dependencies. "
-            "Use the supplied runtime package versions and Python standard library. Never list standard-library modules as pip dependencies. "
-            "Tests must be executable, define all fixtures, and cover requested functionality and rejection/error cases. "
-            "For FastAPI tests use fastapi.testclient.TestClient with follow_redirects, not allow_redirects; httpx AsyncClient(app=...) is not supported by modern httpx. "
-            "When fixing failures, do not weaken valid test assertions or coverage; repair implementation or missing test setup. "
-            "Never invent a successful test result. No shell commands. "
+            "Perform this subtask in support of original_user_request. Respect applied dependency work; do not repeat completed implementation or unrelated subtasks. Return each file exactly once. "
+            "Return executable complete code, no placeholders or shell commands. Keep small applications compact. "
+            "Preserve existing test assertions, test functions, fixture decorators, and imports from the real application. "
+            "Fix implementation or broken test setup; never substitute a dummy application or weaken coverage. "
+            "Use supplied installed packages and their runtime versions. Do not add unnecessary dependencies. "
+            "FastAPI tests use fastapi.testclient.TestClient(app), with follow_redirects (not allow_redirects). "
+            "Define pytest fixtures with @pytest.fixture, and do not overwrite a fixture with another value of the same name. "
+            "Security: preserve authorization, input validation and credential verification. Passwords need a salted KDF, "
+            "sessions need unpredictable tokens or verified signatures and expiry. Never hardcode credentials or store plaintext passwords. "
+            "Endpoints must implement requested behavior. Derive URLs from requests. Never invent successful test results. "
             f"Limit changes to {settings.MAX_PATCH_FILES} files and {settings.MAX_PATCH_LINES} diff lines.\n"
             "CONTEXT_JSON:\n" + json.dumps(context)
         )
         from backend.app.llm.structured import GeneratedFiles, generate_structured
-        changes = generate_structured(self.llm, prompt, GeneratedFiles).model_dump()["files"]
+        from backend.app.llm.proposal_validation import validate_python_proposal
+        changes = generate_structured(self.llm, prompt, GeneratedFiles,
+                                      validate=lambda proposal: validate_python_proposal(proposal, originals)).model_dump()["files"]
         if not isinstance(changes, list) or not changes or len(changes) > settings.MAX_PATCH_FILES:
             raise ValueError("Coding model must return a bounded, nonempty files list")
         unread = []
@@ -207,7 +238,7 @@ class CodingAgent:
             path = WorkspaceService.validate_path(target)
             if is_sensitive_path(target):
                 raise ValueError("Sensitive files cannot be sent to the coding model")
-            if path.exists() and target not in originals:
+            if path.exists() and path not in originals_by_path:
                 unread.append(target)
         if unread and _allow_context_expansion:
             expanded_targets = list(dict.fromkeys(list(originals) + unread))
@@ -223,14 +254,14 @@ class CodingAgent:
             target, content = change["path"], change["content"]
             path = WorkspaceService.validate_path(target)
             if path in seen or is_sensitive_path(target) or not isinstance(content, str):
-                raise ValueError("Invalid, duplicate or sensitive coding target")
+                raise ValueError("TARGET_VALIDATION_ERROR: Duplicate resolved target or unsafe content in one proposal")
             seen.add(path)
             if len(content.encode("utf-8")) > settings.MAX_FILE_SIZE:
                 raise ValueError("Generated file exceeds size limit")
             # Never overwrite an existing file that was not supplied to the model.
-            if path.exists() and target not in originals:
+            if path.exists() and path not in originals_by_path:
                 raise ValueError(f"Model proposed an uninspected existing file: {target}")
-            original = originals.get(target, "")
+            original = originals_by_path.get(path, "")
             if path.exists() and path.read_text(encoding="utf-8") != original:
                 raise ValueError(f"File changed during generation: {target}")
             if content == original and path.exists():

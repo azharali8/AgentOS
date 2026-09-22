@@ -2,68 +2,256 @@
 @tailwind components;
 @tailwind utilities;
 
+/* =========================================================
+   AGENTOS SEMANTIC THEME TOKEN SYSTEM
+   Light:  :root
+   Dark:   html[data-theme="dark"]
+   Applied by useWorkspaceSettings → document.documentElement.dataset.theme
+   ========================================================= */
+
 :root {
-  --background: 240 20% 99%;
-  --foreground: 222 47% 11%;
+  --canvas:            #fcfdfd;
+  --surface:           #ffffff;
+  --surface-secondary: #f8fafc;
+  --surface-elevated:  #ffffff;
+  --sidebar:           #fbfcfd;
+  --foreground:        #0f172a;
+  --muted-foreground:  #64748b;
+  --border:            #e2e8f0;
+  --border-subtle:     #f1f5f9;
+  --input-bg:          #f8fafc;
+  --accent:            #4f46e5;
+  --accent-foreground: #ffffff;
+  --accent-subtle:     #eef2ff;
+  --code-bg:           #1e293b;
+  --code-fg:           #e2e8f0;
+  --success:           #10b981;
+  --warning:           #f59e0b;
+  --danger:            #ef4444;
 
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-
-  --primary: 243 75% 59%;
-  --primary-foreground: 210 40% 98%;
-
-  --secondary: 240 14% 96%;
-  --secondary-foreground: 222 47% 11%;
-
-  --muted: 240 10% 95%;
-  --muted-foreground: 220 9% 46%;
-
-  --accent: 243 100% 96%;
-  --accent-foreground: 243 75% 59%;
-
-  --border: 240 12% 90%;
-  --input: 240 12% 90%;
-  --ring: 243 75% 59%;
-
-  --radius: 0.75rem;
+  /* Tailwind shadcn compat aliases (hsl values not needed; we use direct hex) */
+  --background: #ffffff;
+  --foreground: #0f172a;
 }
 
+html[data-theme="dark"] {
+  --canvas:            #0f141c;
+  --surface:           #171d27;
+  --surface-secondary: #1e2634;
+  --surface-elevated:  #222c3c;
+  --sidebar:           #131923;
+  --foreground:        #f1f5f9;
+  --muted-foreground:  #94a3b8;
+  --border:            #283344;
+  --border-subtle:     #1e2634;
+  --input-bg:          #1e2634;
+  --accent:            #6366f1;
+  --accent-foreground: #ffffff;
+  --accent-subtle:     #242b3d;
+  --code-bg:           #0d1117;
+  --code-fg:           #e2e8f0;
+  --success:           #10b981;
+  --warning:           #f59e0b;
+  --danger:            #ef4444;
+
+  --background: #0f141c;
+  --foreground: #f1f5f9;
+}
+
+/* =========================================================
+   BASE STYLES
+   body inherits from CSS variables so every element can use them
+   ========================================================= */
 body {
-  color: #0f172a;
-  background-color: #f8fafc;
-  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--foreground);
+  background-color: var(--canvas);
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Fine subtle dot grid pattern for AI workspace */
-.bg-grid-pattern {
-  background-image: radial-gradient(rgba(148, 163, 184, 0.28) 1px, transparent 1px);
-  background-size: 24px 24px;
+/* =========================================================
+   SEMANTIC UTILITY CLASSES — consumed by all components
+   ========================================================= */
+.theme-bg-canvas    { background-color: var(--canvas); }
+.theme-bg-surface   { background-color: var(--surface); }
+.theme-bg-secondary { background-color: var(--surface-secondary); }
+.theme-bg-elevated  { background-color: var(--surface-elevated); }
+.theme-bg-sidebar   { background-color: var(--sidebar); }
+.theme-bg-input     { background-color: var(--input-bg); }
+
+.theme-text-primary { color: var(--foreground); }
+.theme-text-muted   { color: var(--muted-foreground); }
+.theme-text-accent  { color: var(--accent); }
+
+.theme-border        { border-color: var(--border); }
+.theme-border-subtle { border-color: var(--border-subtle); }
+
+/* Code / terminal blocks: always dark-on-dark in light mode, darker in dark mode */
+.theme-code-block {
+  background-color: var(--code-bg);
+  color: var(--code-fg);
 }
 
-/* Custom crisp scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/* =========================================================
+   SCROLLBARS
+   ========================================================= */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+html[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #334155; }
+html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* =========================================================
+   FONTS
+   ========================================================= */
+.font-mono {
+  font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular,
+    Menlo, Monaco, Consolas, monospace;
 }
 
-::-webkit-scrollbar-track {
+/* =========================================================
+   MODEL SELECTOR DROPDOWN
+   Uses CSS variable tokens so it themes automatically
+   ========================================================= */
+.model-picker {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.model-picker > .model-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  font-size: 12px;
+  color: inherit;
+  outline: none;
+}
+
+.model-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 60;
+  width: 280px;
+  max-width: min(280px, calc(100vw - 40px));
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--foreground);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.18);
+}
+
+.model-menu [role="listbox"] { max-height: 220px; overflow-y: auto; }
+
+.model-menu button[role="option"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--foreground);
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 9999px;
+.model-menu button[role="option"]:hover,
+.model-menu button[role="option"]:focus-visible {
+  background: var(--accent-subtle);
+  color: var(--accent);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+.model-menu button[aria-selected="true"] {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
 }
 
-.font-mono {
-  font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+.model-menu .model-refresh {
+  width: 100%;
+  font-size: 11px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  color: var(--accent);
+  background: transparent;
+  margin-top: 4px;
 }
+
+/* =========================================================
+   ANIMATIONS
+   ========================================================= */
+.execution-stage-pulse {
+  animation: pulse-subtle 2s infinite ease-in-out;
+}
+
+.approval-card-enter {
+  animation: approval-enter 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.9); }
+}
+
+@keyframes approval-enter {
+  from { opacity: 0; transform: scale(0.98) translateY(4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Live waveform animation */
+@keyframes live-bar {
+  0%, 100% { transform: scaleY(0.3); }
+  50%       { transform: scaleY(1); }
+}
+
+.live-bar-1 { animation: live-bar 0.8s ease-in-out infinite; }
+.live-bar-2 { animation: live-bar 0.8s ease-in-out infinite 0.15s; }
+.live-bar-3 { animation: live-bar 0.8s ease-in-out infinite 0.3s; }
+.live-bar-4 { animation: live-bar 0.8s ease-in-out infinite 0.45s; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* =========================================================
+   AUTH PAGE SPECIFIC (light only, not themed)
+   ========================================================= */
+.auth-page {
+  background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+  min-height: 100vh;
+}
+
+/* Evidence-backed engineering conversation; shell and composer remain unchanged. */
+.engineering-stream{font-size:13px;line-height:1.65}
+.engineering-row{display:flex;align-items:center;gap:9px;font-size:13px;min-height:28px}
+.engineering-row>svg{flex-shrink:0;color:#7c8596}
+.engineering-meta{font-size:10px;color:#788295;margin-left:23px}
+.engineering-details{margin:5px 0 5px 23px}
+.engineering-stream summary{font-size:11px;color:#737c8e;cursor:pointer;padding:4px 0}
+.engineering-code{font-size:11px;line-height:1.65;background:var(--bg-secondary,#f6f7f9);border:1px solid #dfe3eb;border-radius:8px;padding:12px;max-height:320px;overflow:auto;white-space:pre;tab-size:4}
+.engineering-patch{margin-left:23px;max-width:100%;overflow:hidden}
+.engineering-artifact{display:inline-flex;gap:4px;align-items:center;font-size:10px;color:#788295;margin:5px 0 0 23px}
+.engineering-failed>.engineering-row{color:#b2394f}
+.engineering-approval{border:1px solid #dcd5ef;border-radius:12px;padding:16px;margin:18px 0;background:var(--bg-surface,#fff)}
+.engineering-approval h3{font-size:13px;font-weight:600}
+.engineering-approval button{padding:7px 12px;border:1px solid #dcd5ef;border-radius:8px;font-size:12px}
+.engineering-approval .engineering-approve{background:#6550c7;color:white;border-color:#6550c7}
+.engineering-approval button:disabled{opacity:.5;cursor:not-allowed}
+.engineering-link{font-size:11px;color:#6550c7;text-decoration:underline}
+.engineering-active{animation:engineering-spin 1.1s linear infinite;color:#6550c7!important}
+@keyframes engineering-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.engineering-active{animation:none}}

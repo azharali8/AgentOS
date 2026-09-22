@@ -35,6 +35,16 @@ from backend.app.workflows.multi_agent_state import MultiAgentState
 logger = logging.getLogger("agentos.multi_agent_nodes")
 
 
+def _supervisor(state):
+    # Pin the selected model for the whole task, including approval resumption.
+    from backend.app.llm.factory import get_llm_provider
+    from backend.app.llm.ollama import OllamaProvider
+    provider = get_llm_provider()
+    if isinstance(provider, OllamaProvider) and state.get("selected_model"):
+        provider.model = state["selected_model"]
+    return SupervisorAgent(llm_provider=provider)
+
+
 def supervisor_plan_node(state: MultiAgentState) -> Dict[str, Any]:
     """Initialize multi-agent coordination task and budget."""
     task_id = state.get("task_id", "task-1")
@@ -57,7 +67,7 @@ def decompose_task_node(state: MultiAgentState) -> Dict[str, Any]:
     task_id = state.get("task_id", "task-1")
     instruction = state.get("user_instruction", "")
 
-    supervisor = SupervisorAgent()
+    supervisor = _supervisor(state)
     subtasks = supervisor.plan_and_decompose(instruction, task_id=task_id)
 
     for st in subtasks:
@@ -68,7 +78,15 @@ def decompose_task_node(state: MultiAgentState) -> Dict[str, Any]:
     has_coding = any(st.assigned_agent == AgentType.CODING for st in subtasks)
     approval_id = f"appr-{task_id[:8]}-multi" if has_coding else None
 
+    # The initial diagnostic test is superseded only by the required post-fix
+    # full-suite verification, never by an unrelated passing test.
+    from backend.app.services.engineering_intent import engineering_intent
+    replacements = {}
+    ids = {st.subtask_id for st in subtasks}
+    if engineering_intent(instruction) == "fix" and {"run-tests", "retest"}.issubset(ids):
+        replacements["run-tests"] = "retest"
     return {
+        "recovery_replacements": replacements,
         "subtasks": [st.model_dump() for st in subtasks],
         "approval_required": has_coding,
         "approval_id": approval_id,
@@ -92,7 +110,7 @@ def parallel_execution_node(state: MultiAgentState) -> Dict[str, Any]:
     completed_ids = set(state.get("completed_subtask_ids", []))
     subtask_results = dict(state.get("subtask_results", {}))
 
-    supervisor = SupervisorAgent()
+    supervisor = _supervisor(state)
 
     # Find runnable subtasks (dependencies met)
     runnable: List[SubTask] = []
@@ -102,6 +120,7 @@ def parallel_execution_node(state: MultiAgentState) -> Dict[str, Any]:
             continue
         if all(dep in completed_ids for dep in st.dependencies):
             st.input_data = {**st.input_data, "user_instruction": state.get("user_instruction", ""),
+                             "failure_history": [r for r in subtask_results.values() if r.get("agent_type") == AgentType.TESTING.value],
                              "changed_files": list(dict.fromkeys(f for r in subtask_results.values()
                                  if r.get("agent_type") == AgentType.CODING.value for f in r.get("files_modified", []))),
                              **{dep: subtask_results[dep] for dep in st.dependencies if dep in subtask_results}}
@@ -150,8 +169,18 @@ def parallel_execution_node(state: MultiAgentState) -> Dict[str, Any]:
         if res.status in (AgentStatus.FAILED, AgentStatus.TIMEOUT, AgentStatus.CANCELLED):
             fatal_error = res.error or res.summary
 
+    from backend.app.services.engineering_intent import engineering_intent, failed_test_result
+    intent = engineering_intent(state.get("user_instruction", ""))
+    observed = [r for r in batch_results.values() if failed_test_result(r)]
+    other_failures = [r for r in batch_results.values() if r.status != AgentStatus.COMPLETED and not failed_test_result(r)]
+    awaiting_diagnosis = any(s.get("assigned_agent") == AgentType.DEBUGGER.value
+                            and any(r.subtask_id in s.get("dependencies", []) for r in observed)
+                            and s["subtask_id"] not in completed_ids for s in subtasks_raw)
+    if observed and not other_failures and (intent in ("test", "diagnose") or awaiting_diagnosis):
+        fatal_error = None
+
     recovery = {}
-    failed_tests = [r for r in batch_results.values() if r.agent_type == AgentType.TESTING and r.status == AgentStatus.FAILED]
+    failed_tests = observed if intent not in ("test", "diagnose") and not awaiting_diagnosis else []
     iteration = state.get("iteration", 0)
     if (failed_tests and len(failed_tests) == len([r for r in batch_results.values() if r.status != AgentStatus.COMPLETED])
             and state.get("applied_coding_ids") and iteration < settings.MAX_DEBUG_ATTEMPTS
@@ -250,7 +279,7 @@ def human_approval_node(state: MultiAgentState) -> Dict[str, Any]:
         ):
             return {"status": "FAILED", "error": "Approval does not match the proposed patch"}
         patch_obj = Patch(**patch_dict)
-        supervisor = SupervisorAgent()
+        supervisor = _supervisor(state)
         apply_outcome = supervisor.coding_agent.apply_patch(patch_obj, expected_patch_hash=patch_hash)
         EventService.record_event(
             task_id,
@@ -275,7 +304,7 @@ def human_approval_node(state: MultiAgentState) -> Dict[str, Any]:
 def security_review_node(state: MultiAgentState) -> Dict[str, Any]:
     """Execute advisory security audit."""
     task_id = state.get("task_id", "task-1")
-    supervisor = SupervisorAgent()
+    supervisor = _supervisor(state)
     sec_subtask = SubTask(
         task_id=task_id,
         subtask_id=f"sec-review-{task_id[:6]}",
@@ -303,8 +332,23 @@ def merge_results_node(state: MultiAgentState) -> Dict[str, Any]:
             subtask_id = replacements[subtask_id]
         return bool(visited) and subtask_results.get(subtask_id, {}).get("status") == AgentStatus.COMPLETED.value
     agent_results = [AgentResult(**res_dict) for s_id, res_dict in subtask_results.items() if not recovered(s_id)]
-    supervisor = SupervisorAgent()
+    supervisor = _supervisor(state)
     aggregated = supervisor.aggregator.aggregate(agent_results)
+    from backend.app.services.engineering_intent import engineering_intent, valid_test_result, failed_test_result
+    intent = engineering_intent(instruction)
+    all_results = [AgentResult(**r) for r in subtask_results.values()]
+    # Every required operation must actually have finished. Keep all original
+    # evidence in aggregation; only the task verdict is intent-aware.
+    test_results = [r for r in all_results if r.agent_type == AgentType.TESTING]
+    latest_test = test_results[-1] if test_results else None
+    acceptable = lambda r: r.status == AgentStatus.COMPLETED or (failed_test_result(r) and (
+        intent in ("test", "diagnose") or recovered(r.subtask_id)))
+    aggregated["all_succeeded"] = bool(all_results) and all(acceptable(r) for r in all_results)
+    aggregated["all_succeeded"] &= len(state.get("completed_subtask_ids", [])) == len(state.get("subtasks", []))
+    if intent == "diagnose":
+        aggregated["all_succeeded"] &= any(r.agent_type == AgentType.DEBUGGER and r.status == AgentStatus.COMPLETED for r in all_results)
+    if intent not in ("test", "diagnose") and any(r.agent_type == AgentType.CODING for r in all_results):
+        aggregated["all_succeeded"] &= bool(latest_test and valid_test_result(latest_test) and latest_test.evidence.get("passed") is True)
     if state.get("security_passed") is False:
         aggregated["all_succeeded"] = False
     final_text = supervisor.synthesize_response(instruction, aggregated, task_id=task_id)

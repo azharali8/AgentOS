@@ -149,7 +149,10 @@ def test_debugger_agent_root_cause_diagnosis():
     assert res.status == AgentStatus.COMPLETED
     assert "diagnosis" in res.evidence
     diag = DiagnosisReport(**res.evidence["diagnosis"])
-    assert diag.confidence_score > 0.0
+    assert diag.confidence_score == 0.0
+    assert "Observed test execution evidence" in diag.root_cause
+    assert "Exit code:" in diag.root_cause
+    assert diag.suggested_fix.startswith("Unverified model repair proposal")
     assert len(diag.suspected_files) >= 1
 
 

@@ -60,6 +60,12 @@ class MultiAgentService:
 
         def _run():
             try:
+                from backend.app.llm.factory import get_llm_provider
+                provider = get_llm_provider()
+                provider.check_available()
+                initial_state["selected_model"] = getattr(provider, "model", None)
+                from backend.app.services.event_service import EventService
+                EventService.record_event(task_id, "MODEL_SELECTED", payload={"model": initial_state["selected_model"]})
                 TaskService.update_task_status(task_id, TaskStatus.EXECUTING)
                 result_state = graph.invoke(initial_state, config=config)
                 _active_multi_agent_states[task_id] = result_state

@@ -66,6 +66,7 @@ logs/
 # Node & Next.js (Frontend)
 frontend/node_modules/
 frontend/.next/
+frontend/.next-*/
 frontend/out/
 frontend/.turbo/
 frontend/*.tsbuildinfo

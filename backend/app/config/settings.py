@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from sqlalchemy.engine import make_url
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     TASK_TOKEN_LIMIT: int = 100000
     AGENT_TOKEN_LIMIT: int = 50000
     AUTH_ENABLED: bool = False  # Safe dev/test default; enabled in production
+    AUTH_ALLOW_REGISTRATION: bool = False  # Opt-in for the existing local, in-memory account store
+    GOOGLE_OAUTH_CLIENT_ID: str = ""  # Reserved; no OAuth routes are enabled yet
+    GOOGLE_OAUTH_CLIENT_SECRET: str = ""
+    GITHUB_OAUTH_CLIENT_ID: str = ""
+    GITHUB_OAUTH_CLIENT_SECRET: str = ""
     API_KEY_SALT: str = "agentos-default-salt-change-in-prod"
     JWT_SECRET: str = "agentos-default-jwt-secret-change-in-prod"
     JWT_EXPIRATION: int = 3600  # seconds
@@ -96,7 +101,7 @@ class Settings(BaseSettings):
 
     # Phase 10 CORS — allowed origins for the Control Center frontend
     # Override via CORS_ORIGINS env var (comma-separated) in production
-    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
 
     # Phase 16 PostgreSQL + Redis Distributed Coordination Settings
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -121,6 +126,8 @@ class Settings(BaseSettings):
     VOICE_TTS_PROVIDER: str = "browser"    # "browser" | "mock"
     VOICE_MAX_AUDIO_SIZE_BYTES: int = 15 * 1024 * 1024  # 15 MB
     VOICE_TIMEOUT_SECONDS: int = 60
+    VOICE_STREAM_IDLE_SECONDS: float = Field(default=60, gt=0, le=600)
+    VOICE_STREAM_MAX_SECONDS: float = Field(default=300, gt=0, le=600)
 
     @property
     def cors_origins_list(self) -> list[str]:

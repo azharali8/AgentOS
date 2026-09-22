@@ -38,18 +38,21 @@ interface RealArtifact {
   content: any;
 }
 
-export const ApprovalCenterView: React.FC<ApprovalCenterViewProps> = ({ client }) => {
+export const ApprovalCenterView: React.FC<ApprovalCenterViewProps> = ({ client, userRole }) => {
   const [approvals, setApprovals] = useState<ApprovalRequestItem[]>([]);
   const [artifacts, setArtifacts] = useState<RealArtifact[]>([]);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const canResolve = userRole === 'DEVELOPER' || userRole === 'ADMIN';
 
   const loadData = async () => {
     try {
       setLoading(true);
       const [list, tasks] = await Promise.all([
-        client.listApprovals(20).catch(() => []),
+        client.listApprovals(100),
         client.listTasks(10).catch(() => []),
       ]);
       setApprovals(list);
@@ -86,7 +89,7 @@ export const ApprovalCenterView: React.FC<ApprovalCenterViewProps> = ({ client }
         setSelectedArtifactId(allArtifacts[0].id);
       }
     } catch {
-      // Offline fallback
+      setError('Could not load approvals. Check the connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -97,10 +100,16 @@ export const ApprovalCenterView: React.FC<ApprovalCenterViewProps> = ({ client }
   }, []);
 
   const handleResolve = async (approvalId: string, approved: boolean) => {
+    if (resolving || !canResolve) return;
     setResolving(true);
+    setError('');setNotice('');
     try {
       await client.resolveApproval(approvalId, approved);
+      setNotice(approved ? 'Approval recorded. Check task activity for execution progress.' : 'Request rejected.');
       await loadData();
+    } catch (error) {
+      const status = (error as {status?:number}).status;
+      setError(status === 403 ? 'Approval requires a Developer or Admin account.' : status === 409 ? 'This request was already resolved. Refresh approvals.' : 'Could not resolve the request. Check the connection and refresh before retrying.');
     } finally {
       setResolving(false);
     }
@@ -111,6 +120,9 @@ export const ApprovalCenterView: React.FC<ApprovalCenterViewProps> = ({ client }
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-12">
+      {error && <div role="alert" className="text-rose-700 bg-rose-50 rounded-xl p-4">{error} <button onClick={()=>void loadData()} className="underline">Refresh</button></div>}
+      {notice && <p role="status" className="text-emerald-700">{notice}</p>}
+      {!canResolve && <p className="text-slate-600">Approvals require a Developer or Admin account. Your current account can view requests.</p>}
       {/* Live Approval Notification Banner if any gate is pending */}
       {pendingApprovals.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
@@ -130,14 +142,14 @@ export const ApprovalCenterView: React.FC<ApprovalCenterViewProps> = ({ client }
 
           <div className="flex items-center space-x-2">
             <button
-              disabled={resolving}
+              disabled={resolving || !canResolve}
               onClick={() => handleResolve(pendingApprovals[0].approval_id, false)}
               className="px-3 py-1.5 bg-white border border-amber-300 text-rose-700 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-colors"
             >
               Reject
             </button>
             <button
-              disabled={resolving}
+              disabled={resolving || !canResolve}
               onClick={() => handleResolve(pendingApprovals[0].approval_id, true)}
               className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
             >

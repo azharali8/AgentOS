@@ -69,7 +69,7 @@ class TestingAgent:
             tool_res = self.runner.execute(tool_req)
             duration = round(time.perf_counter() - start_time, 4)
 
-            res_data = tool_res.data if tool_res.success and isinstance(tool_res.data, dict) else {}
+            res_data = tool_res.data if isinstance(tool_res.data, dict) else {}
             passed = res_data.get("passed", tool_res.success)
             counts = res_data.get("counts", {})
             passed_c = counts.get("passed") or 0
@@ -88,21 +88,28 @@ class TestingAgent:
                 stderr_redacted=res_data.get("stderr", "")[:500],
             )
 
+            parsed_diagnostic = TestService.parse_test_report(res_data) if res_data else {}
             status = AgentStatus.COMPLETED if passed else AgentStatus.FAILED
             summary = f"Testing execution completed: {passed_c} passed, {failed_c} failed ({duration}s)."
             AgentBudgetTracker.record_tool_call(task_id, AgentType.TESTING)
 
             evidence = {
                 "test_results": res_data or {"exit_code": report.exit_code, "passed": passed},
-                "structured_report": report.model_dump(),
+                "structured_report": parsed_diagnostic or report.model_dump(),
                 "passed": passed,
+                "execution_failed": not tool_res.success or bool(res_data.get("timed_out")),
             }
         except Exception as exc:
             logger.error("TestingAgent execution error: %s", exc)
             status = AgentStatus.FAILED
             summary = f"Error during test execution: {exc}"
-            evidence = {"error": str(exc), "passed": False}
+            evidence = {"error": str(exc), "passed": False, "execution_failed": True}
 
+        from backend.app.services.engineering_intent import valid_test_result
+        if not valid_test_result({"evidence": evidence}):
+            evidence["execution_failed"] = True
+            status = AgentStatus.FAILED
+        evidence["error_type"] = "WORKFLOW_ERROR" if evidence.get("execution_failed") else "TEST_FAILURE" if not evidence.get("passed") else None
         AgentBudgetTracker.record_token_usage(task_id, 200, AgentType.TESTING)
 
         return AgentResult(
@@ -111,6 +118,7 @@ class TestingAgent:
             status=status,
             summary=summary,
             evidence=evidence,
+            error=("WORKFLOW_ERROR: test runner infrastructure failed" if evidence.get("execution_failed") else None),
         )
 
 

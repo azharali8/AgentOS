@@ -1,5 +1,5 @@
 """
-AgentOS Phase 9 — API v1 Router Definition.
+AgentOS Phase 9 â€” API v1 Router Definition.
 
 Binds unified v1 routes for:
 - /api/v1/tasks
@@ -16,10 +16,11 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.app.auth.service import UserRole, get_current_user, require_role, AuthenticatedUser, AuthService
+from backend.app.auth.service import REGISTRATION_PASSWORD_MIN, REGISTRATION_PASSWORD_MAX, REGISTRATION_PASSWORD_MESSAGE, valid_registration_password
 from backend.app.agents.registry import AgentRegistry
 from backend.app.agents.supervisor import SupervisorAgent
 from backend.app.models.multi_agent import AgentDefinition, AgentType, SubTask
@@ -69,13 +70,46 @@ def get_artifact(artifact_id: str, user: AuthenticatedUser = Depends(get_current
         raise HTTPException(status_code=409, detail=str(exc))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 0. Authentication API
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class LoginRequestV1(BaseModel):
-    email: str = Field(..., description="User email address")
-    password: str = Field(..., min_length=4, description="User password")
+    email: str = Field(..., min_length=1, max_length=254, description="Email address or username")
+    password: str = Field(..., min_length=1, max_length=1024, description="User password")
+
+
+def local_registration_enabled() -> bool:
+    return settings.AUTH_ALLOW_REGISTRATION and settings.APP_ENV.lower() not in ('production', 'prod')
+
+
+@auth_v1.get('/options')
+def auth_options():
+    return {'registration_enabled': local_registration_enabled()}
+
+
+class RegistrationRequestV1(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=False)
+    email: str = Field(min_length=3, max_length=254, pattern=r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+    username: str = Field(min_length=3, max_length=60, pattern=r'^\S(?:.*\S)?$')
+    password: str = Field(min_length=REGISTRATION_PASSWORD_MIN, max_length=REGISTRATION_PASSWORD_MAX)
+
+    @field_validator('password')
+    @classmethod
+    def validate_registration_password(cls, value: str) -> str:
+        if not valid_registration_password(value):
+            raise ValueError(REGISTRATION_PASSWORD_MESSAGE)
+        return value
+
+
+
+@auth_v1.post('/register', status_code=201)
+def register_v1(req: RegistrationRequestV1):
+    if not local_registration_enabled():
+        raise HTTPException(status_code=404, detail='Registration is unavailable')
+    if not AuthService.register_local_account(req.email, req.username, req.password):
+        raise HTTPException(status_code=400, detail='Unable to create an account with these details')
+    return {'message': 'Account created. Sign in to continue.'}
 
 
 class LoginResponseV1(BaseModel):
@@ -127,14 +161,17 @@ def get_current_user_profile(user: AuthenticatedUser = Depends(get_current_user)
 
 
 @auth_v1.post("/logout")
-def logout_v1(user: AuthenticatedUser = Depends(get_current_user)):
+def logout_v1(request: Request, user: AuthenticatedUser = Depends(get_current_user)):
     """Terminate current user session."""
+    token = request.headers.get('x-api-key') or request.headers.get('authorization', '').removeprefix('Bearer ')
+    if token:
+        AuthService.revoke_token(token)
     return {"message": "Session terminated successfully"}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 1. Unified Tasks API
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TaskCreateRequestV1(BaseModel):
     task: str = Field(..., min_length=3, description="Task prompt or instruction")
@@ -161,13 +198,15 @@ class TaskResponseV1(BaseModel):
 
 
 @tasks_v1.post("", response_model=TaskResponseV1, status_code=201)
-def create_task(req: TaskCreateRequestV1, user: AuthenticatedUser = Depends(get_current_user)):
+def create_task(req: TaskCreateRequestV1, user: AuthenticatedUser = Depends(require_role(UserRole.USER))):
     """
     Submit a task to the AgentOS execution platform and start the real Supervisor/LangGraph execution.
     """
     RateLimiter.check_rate_limit(f"task_create:{user.user_id}")
     
     from backend.app.models.task import TaskRequest
+    from backend.app.services.task_context import instruction_with_context
+    req.task = instruction_with_context(req.task, req.context.get("attachments"))
     task_req = TaskRequest(instruction=req.task)
     task_record = TaskService.create_task(request=task_req)
     
@@ -416,9 +455,9 @@ def get_task_trace(task_id: str, user: AuthenticatedUser = Depends(get_current_u
     return trace.model_dump()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 2. Unified Agents API
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @agents_v1.get("", response_model=List[AgentDefinition])
 def list_agents_v1(user: AuthenticatedUser = Depends(get_current_user)) -> List[AgentDefinition]:
@@ -523,9 +562,9 @@ def invoke_agent_v1(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 3. System & Health API
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @system_v1.get("/health")
 def get_system_health() -> Dict[str, Any]:
@@ -560,7 +599,7 @@ def get_system_version() -> Dict[str, Any]:
         "platform": "AgentOS",
         "version": "0.3.0",
         "api_version": "v1",
-        "phase": "Phase 9 — Production Platform & SDK",
+        "phase": "Phase 9 â€” Production Platform & SDK",
     }
 
 
@@ -573,6 +612,22 @@ def get_system_metrics(user: AuthenticatedUser = Depends(get_current_user)) -> D
         "system_metrics": metrics,
         "llm_usage": llm_summary,
     }
+
+
+class LocalModelSelection(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+@system_v1.get('/local-models')
+def installed_local_models(user: AuthenticatedUser = Depends(get_current_user)):
+    from backend.app.services.local_model_settings import local_models
+    return local_models()
+
+
+@system_v1.put('/local-models')
+def select_local_model(req: LocalModelSelection, user: AuthenticatedUser = Depends(require_role(UserRole.USER))):
+    from backend.app.services.local_model_settings import select_model
+    return select_model(req.model)
 
 
 @system_v1.get("/models")
@@ -597,7 +652,7 @@ def get_system_runtime() -> Dict[str, Any]:
     from backend.app.services.concurrency_manager import ConcurrencyManager
     return {
         "platform": "AgentOS",
-        "phase": "Phase 13 — Production-Grade Autonomous Engineering Platform",
+        "phase": "Phase 13 â€” Production-Grade Autonomous Engineering Platform",
         "model_runtime": ModelRouter.get_runtime_summary(),
         "concurrency": ConcurrencyManager.get_metrics(),
     }
@@ -623,7 +678,7 @@ def get_system_audit_logs(
     return [l.model_dump() for l in logs]
 
 
-# ── Phase 15: Distributed Worker & Queue APIs ────────────────────────────────
+# â”€â”€ Phase 15: Distributed Worker & Queue APIs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @system_v1.get("/workers")
 def list_workers_v1(user: AuthenticatedUser = Depends(get_current_user)) -> List[Dict[str, Any]]:
@@ -722,9 +777,9 @@ def get_task_worker_v1(
 
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 4. Human-in-the-Loop Approvals API
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class ApprovalResolveRequestV1(BaseModel):
     approved: bool = Field(default=True, description="Approve (True) or Reject (False)")
@@ -799,9 +854,9 @@ def resolve_approval_v1(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 5. Workspace Explorer API (Strict Path Security Enforced)
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @workspace_v1.get("/tree")
 def get_workspace_tree(
@@ -875,9 +930,9 @@ def get_workspace_file(
         raise HTTPException(status_code=500, detail=f"Failed to read file: {str(exc)}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5b. Workspace Configuration API — Active Project Switching
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# 5b. Workspace Configuration API â€” Active Project Switching
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class WorkspaceSetRootRequest(BaseModel):
     path: str = Field(..., min_length=1, description="Absolute path to the project directory on the server")
@@ -935,7 +990,7 @@ def set_workspace_root(
     agentos_root = Path(PROJECT_ROOT).resolve()
     try:
         target.relative_to(agentos_root)
-        # If we get here, target is inside agentos_root — reject it
+        # If we get here, target is inside agentos_root â€” reject it
         raise HTTPException(
             status_code=400,
             detail=(
@@ -944,7 +999,7 @@ def set_workspace_root(
             ),
         )
     except ValueError:
-        pass  # Good — target is outside agentos_root
+        pass  # Good â€” target is outside agentos_root
 
     # Count files for the response (non-recursive, top-level only)
     try:
@@ -990,6 +1045,46 @@ def set_workspace_root(
         "files_count": files_count,
         "dirs_count": dirs_count,
         "persisted": env_path.exists(),
+    }
+
+
+@workspace_v1.post("/disconnect")
+def disconnect_workspace_v1(
+    user: AuthenticatedUser = Depends(require_role(UserRole.DEVELOPER)),
+) -> Dict[str, Any]:
+    """
+    Safely disconnect the active workspace.
+    Resets WORKSPACE_ROOT to the default sandboxed empty workspace directory
+    and cleans up .env configuration.
+    """
+    import os
+    from pathlib import Path
+    from backend.app.config.settings import PROJECT_ROOT
+
+    agentos_root = Path(PROJECT_ROOT).resolve()
+    default_workspace = (agentos_root / "workspace").resolve()
+    default_workspace.mkdir(parents=True, exist_ok=True)
+
+    settings.WORKSPACE_ROOT = str(default_workspace)
+    os.environ["WORKSPACE_ROOT"] = str(default_workspace)
+
+    # Clean up .env persistence
+    if "PYTEST_CURRENT_TEST" not in os.environ and getattr(settings, "APP_ENV", "") != "test":
+        env_path = agentos_root / ".env"
+        try:
+            if env_path.exists():
+                lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+                lines = [l for l in lines if not l.startswith("WORKSPACE_ROOT=")]
+                env_path.write_text("".join(lines), encoding="utf-8")
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "message": "Workspace disconnected successfully.",
+        "root": "workspace",
+        "path": str(default_workspace),
+        "disconnected": True,
     }
 
 
@@ -1118,9 +1213,9 @@ def create_project_v1(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 6. Evaluations & Intelligence APIs
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @evaluations_v1.get("/benchmarks")
 def run_benchmarks_v1(user: AuthenticatedUser = Depends(require_role(UserRole.DEVELOPER))) -> Dict[str, Any]:
@@ -1133,9 +1228,9 @@ def run_benchmarks_v1(user: AuthenticatedUser = Depends(require_role(UserRole.DE
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 7. Streaming & WebSocket Events
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @events_v1.websocket("/stream/{task_id}")
 async def stream_task_events_ws(

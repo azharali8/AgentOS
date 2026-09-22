@@ -15,6 +15,16 @@ class OllamaProvider(BaseLLMProvider):
         self.base_url = settings.OLLAMA_BASE_URL.rstrip("/")
         self.model = settings.OLLAMA_MODEL
 
+    def check_available(self) -> None:
+        try:
+            response = httpx.get(f"{self.base_url}/api/tags", timeout=5)
+            response.raise_for_status()
+            names = {m['name'] for m in response.json()['models']}
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError("Configured Ollama service is unavailable or returned invalid model metadata; check the provider before starting a task") from exc
+        if self.model not in names and not (':' not in self.model and self.model + ':latest' in names):
+            raise RuntimeError(f"Configured Ollama model '{self.model}' is not installed; select an installed model in Settings. Available models: {', '.join(sorted(names))}")
+
     def generate(self, prompt: str, **kwargs) -> str:
         timeout = max(1, min(settings.LLM_TIMEOUT_SECONDS, 900))
         if not _inference_slot.acquire(timeout=timeout):
@@ -50,7 +60,11 @@ class OllamaProvider(BaseLLMProvider):
                 except httpx.HTTPStatusError as exc:
                     if exc.response.status_code == 404:
                         raise RuntimeError(f"Configured Ollama model '{self.model}' is unavailable; use ollama list and set OLLAMA_MODEL to an installed model") from exc
-                    raise RuntimeError(f"Configured Ollama request failed (HTTP {exc.response.status_code})") from exc
+                    if exc.response.status_code == 402:
+                        raise RuntimeError(f"Ollama model {self.model} rejected generation (HTTP 402). Check your Ollama cloud account plan or usage allowance, or explicitly select an installed local chat model in Settings.") from exc
+                    if exc.response.status_code in (401, 403):
+                        raise RuntimeError(f"Ollama model {self.model} access denied (HTTP {exc.response.status_code}). Check Ollama sign-in and model access.") from exc
+                    raise RuntimeError(f"Configured Ollama request failed (HTTP {exc.response.status_code}) for model {self.model}") from exc
                 except httpx.RequestError as exc:
                     raise RuntimeError("Could not reach the configured Ollama model") from exc
         finally:

@@ -95,3 +95,50 @@ class CodingReport(BaseModel):
     verdict: str = "SUCCESS"
     final_status: str = "COMPLETED"
     summary_text: str = ""
+
+
+class FailureClassification(str, Enum):
+    APPLICATION_BUG = "APPLICATION_BUG"
+    TEST_BUG = "TEST_BUG"
+    CONFIGURATION_ERROR = "CONFIGURATION_ERROR"
+    DEPENDENCY_ERROR = "DEPENDENCY_ERROR"
+    ENVIRONMENT_ERROR = "ENVIRONMENT_ERROR"
+    MODEL_AGENT_ERROR = "MODEL_AGENT_ERROR"
+    UNKNOWN = "UNKNOWN"
+
+
+class DiagnosedIssue(BaseModel):
+    """Structured, evidence-grounded diagnosis for a single test failure or issue."""
+    issue_number: int = 1
+    title: str = "Test Failure"
+    test_name: str = ""
+    test_file: Optional[str] = None
+    source_file: Optional[str] = None
+    line: Optional[int] = None
+    error_type: str = "AssertionError"
+    message: str = ""
+    stack_trace: str = ""
+    explanation: str = ""
+    likely_cause: str = ""
+    suggested_fix: str = ""
+    classification: FailureClassification = FailureClassification.APPLICATION_BUG
+    confidence: float = Field(default=0.9, ge=0.0, le=1.0)
+    source_snippet: Optional[str] = None
+
+
+class StructuredTestReport(BaseModel):
+    command: str = ""
+    """Aggregated, user-friendly test result and diagnosis summary."""
+    framework: str = "pytest"
+    exit_code: int = 0
+    passed: bool = True
+    passed_count: int = 0
+    failed_count: int = 0
+    skipped_count: int = 0
+    error_count: int = 0
+    total_count: int = 0
+    duration_seconds: float = 0.0
+    issues: List[DiagnosedIssue] = Field(default_factory=list)
+    raw_stdout: str = ""
+    raw_stderr: str = ""
+

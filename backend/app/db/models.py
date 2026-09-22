@@ -383,3 +383,9 @@ class QueueEntryModel(Base):
         Index("ix_task_queue_idempotency", "idempotency_key"),
     )
 
+
+
+class WorkspacePreferenceModel(Base):
+    __tablename__ = "workspace_preferences"
+    key = Column(String(80), primary_key=True)
+    value = Column(JSON, nullable=False)

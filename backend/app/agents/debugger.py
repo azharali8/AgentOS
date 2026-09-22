@@ -30,6 +30,9 @@ logger = logging.getLogger("agentos.debugger")
 DEBUGGER_PROMPT = """DEBUGGER_PROMPT:
 You are an expert Software Debugger Agent for AgentOS.
 Analyze the test failure and code investigation evidence to produce a structured diagnosis and recommended fix.
+Use only captured evidence. Do not invent API history, version changes, or causes.
+The recommended_fix is an unverified repair proposal. Preserve existing tests,
+assertions, pytest fixture decorators, and imports of the real application.
 
 Output ONLY a JSON object:
 {
@@ -90,7 +93,19 @@ class DebuggerAgent:
         )
         try:
             from backend.app.llm.structured import generate_structured
-            return generate_structured(self.llm, prompt, DebugDiagnosis)
+            diagnosis = generate_structured(self.llm, prompt, DebugDiagnosis)
+            if self.strict:
+                # Free-form model explanations are hypotheses, not established facts.
+                # Publish captured observations verbatim; only execution can validate
+                # the separately labelled model repair proposal.
+                diagnosis.root_cause = "Observed test execution evidence (underlying cause not independently established):"
+                diagnosis.explanation = investigation.evidence
+                diagnosis.recommended_fix = "Unverified model repair proposal; must pass approval and real tests: " + diagnosis.recommended_fix
+                diagnosis.affected_files = list(investigation.affected_files)
+                diagnosis.affected_symbols = []
+                diagnosis.confidence = 0.0
+                diagnosis.risks = ["The model repair proposal is unverified until applied and retested."]
+            return diagnosis
         except Exception as exc:
             if self.strict:
                 raise RuntimeError(f"Model diagnosis unavailable: {exc}") from exc

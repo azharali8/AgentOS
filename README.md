@@ -59,12 +59,12 @@ flowchart TD
     API --> SUP[Supervisor and task decomposition]
     REPO[Repository intelligence and bounded context] --> SUP
     SUP --> CODE[Coding agent: propose patch]
-    CODE --> VALIDATE[Validate schema, paths and hashes]
+    CODE --> VALIDATE[Validate schema, Python syntax, test preservation, paths and hashes]
     VALIDATE --> APPROVE{Human approval}
     APPROVE -->|Approved| APPLY[Apply verified patch]
     APPROVE -->|Rejected| STOP[Cancelled result]
     APPLY --> TEST[Testing agent: execute tests]
-    TEST -->|Failure within retry budget| DEBUG[Debugger: diagnose failure]
+    TEST -->|Failure within retry budget| DEBUG[Debugger: observations and proposed repair]
     DEBUG --> CODE
     TEST -->|Pass| REVIEW[Reviewer agent]
     REVIEW --> FINAL[Security review and final result]
@@ -74,6 +74,12 @@ flowchart TD
 ```
 
 This diagram follows the coding workflow. LangGraph maintains execution state and approval checkpoints; failed or exhausted steps can terminate with a failure instead of a successful result.
+
+Each repair requires another approval and actual retest. Original failed-test artifacts remain available after recovery; replacement mappings identify which retest resolves each failure. Infrastructure errors, invalid model output, and unsuccessful review cannot become a successful coding result.
+
+Read-only requests run tests and report evidence, optionally followed by diagnosis. A completed diagnostic task can report failing tests; it does not mean those tests passed. Fix requests run tests → diagnosis → proposed repair → approval → apply → retest → review. Recovery is bounded by debug-attempt and subtask budgets, with at most two structured-generation attempts per proposal.
+
+Strict diagnosis publishes captured execution/source observations, not free-form model root-cause claims. Repair advice remains explicitly unverified. Python proposal checks reject syntax errors, whitespace-only changes, removed existing assertions or test functions/fixtures, and removed imports of application modules present in context. These conservative checks can reject legitimate test refactors; they do not replace tests or human review.
 
 Explore the implementation: [workflow graph](backend/app/workflows/multi_agent_workflow.py) · [Supervisor](backend/app/agents/supervisor.py) · [patch application](backend/app/code/patch/applier.py).
 
@@ -170,7 +176,7 @@ Edit `.env` for your machine:
 ```dotenv
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5-coder:3b
+OLLAMA_MODEL=llama3.2:latest
 
 # Use an absolute path to the software project you want AgentOS to work on.
 WORKSPACE_ROOT=/absolute/path/to/your/project
@@ -186,11 +192,11 @@ On Windows, use a path such as `C:/Projects/MyApp`. Keep your target project sep
 With Ollama running, install and check the configured local model:
 
 ```bash
-ollama pull qwen2.5-coder:3b
+ollama pull llama3.2:latest
 ollama list
 ```
 
-This is the repository's default model, not a guarantee of engineering-task completion. For the profile used in the successful guided run, see the [cloud demo configuration](docs/hackathon-demo-report.md#reproducing-the-approved-cloud-profile). Cloud generation sends supplied task/code context to the provider.
+This is the local model used for the September 22 engineering acceptance run; `.env.example` still defaults to `qwen2.5-coder:3b`. Neither model guarantees engineering-task completion. For the earlier guided cloud run, see the [cloud demo configuration](docs/hackathon-demo-report.md#reproducing-the-approved-cloud-profile). Cloud generation sends supplied task/code context to the provider.
 
 The template disables authentication for local development and contains placeholder secrets. Keep this quickstart on localhost. Review authentication and secret configuration before exposing the service.
 
@@ -211,12 +217,12 @@ In another terminal:
 ```bash
 cd frontend
 npm ci
-npm run dev
+npm run dev -- --hostname 127.0.0.1 --port 3001
 ```
 
 The frontend defaults to `http://localhost:8000`. To change it, set `NEXT_PUBLIC_API_URL` in `frontend/.env.local` before starting or building the frontend.
 
-Open the [Control Center](http://localhost:3000) and use the development quick-access sign-in. Select or create a workspace, submit an instruction, then inspect pending approvals and task progress. The backend also exposes [API documentation](http://localhost:8000/docs) and a [liveness endpoint](http://localhost:8000/health).
+Open the [Control Center](http://localhost:3001) and use the development quick-access sign-in. Select or create a workspace, submit an instruction, then inspect pending approvals and task progress. The backend also exposes [API documentation](http://localhost:8000/docs) and a [liveness endpoint](http://localhost:8000/health).
 
 ### 5. Run checks
 
@@ -230,11 +236,11 @@ From `frontend/`:
 
 ```bash
 npm run lint
-node --test tests/voice-endpoint.test.cjs
+node --test tests/*.test.cjs
 npm run build
 ```
 
-Backend regression tests explicitly select the mock model provider; passing regression tests alone does not establish real-model performance. The frontend's `npm test` script currently runs a build, so the voice-endpoint tests are listed separately above.
+Backend regression tests explicitly select the mock model provider; passing regression tests alone does not establish real-model performance. The frontend's `npm test` script currently runs a build, so Node regression tests are listed separately above. These tests do not establish live voice quality.
 
 <details>
 <summary><strong>Docker and distributed infrastructure</strong></summary>
@@ -281,19 +287,20 @@ These are application-level controls, not a claim that arbitrary generated code 
 
 ## Current status
 
-**Active development.** The core engineering path is implemented and has completed a real, guided cloud-model demo. Model diagnosis and review can still be wrong, so independent acceptance checks and human oversight remain necessary.
+**Active development. REAL AUTONOMOUS ENGINEERING LOOP WORKING END-TO-END: NO.** The September 22 local-model acceptance did not complete the requested creation → approval → test → diagnosis → repair → approval → passing retest → review loop. An earlier guided cloud demo succeeded, but does not establish current autonomous reliability.
 
-| Latest recorded verification — September 11, 2026 | Result |
+| Latest engineering verification — September 22, 2026 | Result |
 | :--- | :--- |
-| Backend regression | 515 passed, 1 skipped |
-| Frontend production build | Passed |
-| Frontend lint | Passed with four existing hook warnings |
-| Guided generated-project result | 6 tests and 7 independent API checks passed |
-| Physical microphone and audible TTS | Not verified |
+| Focused backend regression | 76 passed, 3 warnings |
+| Full backend regression | 630 passed, 1 skipped, 4 warnings (298.52s) |
+| Real `llama3.2:latest` endpoint creation | FAILED: test proposal invalid after bounded retries |
+| Real diagnosis request | COMPLETED investigation; actual tests still failed with one setup error |
+| Real repair request | CANCELLED during generation to finalize; no passing retest or review |
+| Frontend / Voice / Live checks | Not rerun or modified in this phase; zero AssemblyAI calls |
 
-These are dated local results, not live CI status or benchmarks. See the [verification report](docs/hackathon-demo-report.md) and [CI workflow](.github/workflows/ci.yml).
+These are dated local results, not live CI status or benchmarks. See the [engineering acceptance report](docs/engineering-loop-acceptance-report.md), [earlier guided demo](docs/hackathon-demo-report.md), and [CI workflow](.github/workflows/ci.yml). The final compact prompt, retry feedback and context/symptom filtering changes have regression coverage but have not completed another real acceptance run.
 
-Remaining work includes improving repeatable model-driven repairs and review, validating the complete physical voice experience, and validating deployment configurations. These are development needs, not completed capabilities or a release commitment.
+The local 3B model can still produce invalid code proposals and incorrect repair advice. Observations are evidence; repair advice is not a verified cause or fix. Repeatable real-model recovery, the physical voice experience, and deployment configurations remain unverified. No generated files were manually repaired and no task was manually marked successful in this phase.
 
 ## Contributing
 

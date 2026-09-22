@@ -74,6 +74,7 @@ export interface WorkspaceItem {
   is_dir: boolean;
   size: number;
   is_sensitive: boolean;
+  depth?: number;
 }
 
 export interface WorkspaceTreeResponse {

@@ -3,12 +3,6 @@
 import React, { useState } from 'react';
 import {
   LayoutGrid,
-  GitBranch,
-  CheckSquare,
-  Bot,
-  Box,
-  Activity,
-  Layers,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -31,14 +25,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const primaryNav = [
     { id: 'workspace', label: 'Workspace', icon: LayoutGrid },
-    { id: 'repository', label: 'Repository', icon: GitBranch },
-    { id: 'tasks', label: 'Tasks', icon: CheckSquare },
-    { id: 'artifacts', label: 'Approvals', icon: Box },
-    { id: 'activity', label: 'Activity', icon: Activity },
   ];
 
   const secondaryNav = [
-    { id: 'operations', label: 'Operations', icon: Layers },
     { id: 'settings', label: 'Settings', icon: Settings },
   ];
 
@@ -46,7 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside
       className={`${
         isCollapsed ? 'w-[4.5rem]' : 'w-56'
-      } bg-white border-r border-slate-200/90 flex flex-col h-screen select-none transition-all duration-200 relative z-20 shrink-0`}
+      } app-sidebar bg-white border-r border-slate-200/90 flex flex-col h-screen select-none transition-all duration-200 relative z-20 shrink-0`}
     >
       {/* Brand Header */}
       <div className="h-16 px-4 flex items-center space-x-2.5">
@@ -69,7 +58,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              title={isCollapsed ? item.label : undefined}
+              title={item.label} aria-label={item.label} data-active={isActive} aria-current={isActive ? 'page' : undefined}
               className={`w-full flex items-center ${
                 isCollapsed ? 'justify-center px-0 py-2' : 'px-3 py-2'
               } rounded-xl text-[13px] font-medium transition-all ${
@@ -94,7 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              title={isCollapsed ? item.label : undefined}
+              title={item.label} aria-label={item.label} data-active={isActive} aria-current={isActive ? 'page' : undefined}
               className={`w-full flex items-center ${
                 isCollapsed ? 'justify-center px-0 py-2' : 'px-3 py-2'
               } rounded-xl text-[13px] font-medium transition-all ${

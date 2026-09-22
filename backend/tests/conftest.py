@@ -36,6 +36,7 @@ def pytest_configure(config) -> None:
     # Provider contract tests instantiate/patch their adapter explicitly; live
     # acceptance is run separately against the real configured provider.
     os.environ["LLM_PROVIDER"] = "mock"
+    os.environ["APP_ENV"] = "test"
 
     # Ensure repository root and sdk package are resolvable
     if str(repo_root) not in sys.path:
