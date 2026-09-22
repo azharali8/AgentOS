@@ -49,15 +49,22 @@ from backend.app.services.workspace_service import WorkspaceService
 
 
 @pytest.fixture(autouse=True)
-def setup_workspace(monkeypatch):
+def setup_workspace(tmp_path, monkeypatch, reset_workspace_root_setting):
     # Patch generation now calls the model. This offline contract suite must
     # explicitly select its deterministic provider rather than use local Ollama.
     monkeypatch.setattr(settings, "LLM_PROVIDER", "mock")
-    workspace_root = Path(settings.WORKSPACE_ROOT)
-    workspace_root.mkdir(parents=True, exist_ok=True)
+    # Run after the global workspace reset and keep every test's files private.
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    monkeypatch.setattr(settings, "WORKSPACE_ROOT", str(workspace_root))
+    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     calc_path = workspace_root / "calculator.py"
-    if not calc_path.exists():
-        calc_path.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    calc_path.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    # Workflow probes need a real test suite, not pytest's 'no tests' exit code.
+    (workspace_root / "test_calculator.py").write_text(
+        "from calculator import add\n\ndef test_add():\n    assert add(2, 3) == 5\n",
+        encoding="utf-8",
+    )
 
 
 def test_repo_intelligence_overview_and_symbols():
@@ -248,7 +255,10 @@ def test_end_to_end_multitask_workflow_and_event_audit():
         instruction="Investigate calculator.py, apply fix, and verify tests",
         sync=True,
     )
-    assert task.status in (TaskStatus.COMPLETED, TaskStatus.WAITING_APPROVAL)
+    assert task.status in (TaskStatus.COMPLETED, TaskStatus.WAITING_APPROVAL), (
+        f"Unexpected workflow outcome: {task.model_dump(mode='json')}; "
+        f"events={EventService.get_task_events(task.task_id)}"
+    )
     
     events = EventService.get_task_events(task.task_id)
     assert len(events) >= 1
