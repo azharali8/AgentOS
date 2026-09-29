@@ -17,6 +17,7 @@ try:
 except ImportError:
     GraphInterrupt = Exception  # type: ignore
 
+from backend.app.config.settings import settings
 from backend.app.models.task import TaskRequest, TaskResult, TaskStatus
 from backend.app.services.task_service import TaskService
 from backend.app.workflows.multi_agent_state import MultiAgentState
@@ -62,7 +63,13 @@ class MultiAgentService:
             try:
                 from backend.app.llm.factory import get_llm_provider
                 provider = get_llm_provider()
-                provider.check_available()
+                selection = (task.metadata or {}).get('model_selection')
+                if settings.LLM_PROVIDER.lower() == 'ollama' and selection:
+                    from backend.app.services.cloud_model_pool import AUTO, AutoCloudProvider
+                    from backend.app.llm.ollama import OllamaProvider
+                    provider = AutoCloudProvider(task_id) if selection == AUTO else OllamaProvider(model=selection)
+                if getattr(provider, 'model', None) != 'AGENTOS_AUTO':
+                    provider.check_available()
                 initial_state["selected_model"] = getattr(provider, "model", None)
                 from backend.app.services.event_service import EventService
                 EventService.record_event(task_id, "MODEL_SELECTED", payload={"model": initial_state["selected_model"]})
@@ -78,7 +85,7 @@ class MultiAgentService:
                         _active_multi_agent_states[task_id] = dict(snap.values)
                 except Exception:
                     pass
-                TaskService.update_task_status(task_id, TaskStatus.WAITING_APPROVAL)
+                TaskService.update_task_status(task_id, TaskStatus.PAUSED if "cloud_capacity" in str(exc) else TaskStatus.WAITING_APPROVAL)
                 logger.info("Multi-agent task %s paused for approval: %s", task_id, exc)
             except Exception as exc:
                 logger.error("Multi-agent task %s error: %s", task_id, exc, exc_info=True)
@@ -114,13 +121,39 @@ class MultiAgentService:
         return TaskService.get_task(task_id)
 
     @staticmethod
+    def resume_capacity(task_id: str, selection: str):
+        graph = get_multi_agent_graph()
+        config = {'configurable': {'thread_id': task_id}}
+        snapshot = graph.get_state(config)
+        interrupts = [i for t in (snapshot.tasks or ()) for i in getattr(t, 'interrupts', ())]
+        if not any(isinstance(i.value, dict) and i.value.get('kind') == 'cloud_capacity' for i in interrupts):
+            raise ValueError('Task is not paused for cloud capacity')
+        from backend.app.db.database import get_db_session
+        from backend.app.db.models import TaskModel
+        with get_db_session() as db:
+            claimed = db.query(TaskModel).filter(TaskModel.task_id == task_id, TaskModel.status == TaskStatus.PAUSED.value).update({'status': TaskStatus.EXECUTING.value})
+            if claimed != 1:
+                raise ValueError('Task is already resuming or is no longer paused')
+        try:
+            result = graph.invoke(Command(resume={'model_selection': selection}), config=config)
+            _active_multi_agent_states[task_id] = result
+            MultiAgentService._persist_outcome(task_id, result, graph, config)
+        except Exception as exc:
+            logger.exception("Failed to resume model checkpoint for %s", task_id)
+            current = TaskService.get_task(task_id)
+            if current and current.status != TaskStatus.CANCELLED:
+                TaskService.set_error(task_id, str(exc))
+        return TaskService.get_task(task_id)
+
+    @staticmethod
     def _persist_outcome(task_id, state, graph, config):
         current = TaskService.get_task(task_id)
         if current and current.status == TaskStatus.CANCELLED:
             return
         snapshot = graph.get_state(config)
         if state.get("__interrupt__") or (snapshot and any("approval" in n for n in snapshot.next)):
-            TaskService.update_task_status(task_id, TaskStatus.WAITING_APPROVAL)
+            is_capacity = any(getattr(i, 'value', {}).get('kind') == 'cloud_capacity' for i in state.get('__interrupt__', []) if isinstance(getattr(i, 'value', None), dict))
+            TaskService.update_task_status(task_id, TaskStatus.PAUSED if is_capacity else TaskStatus.WAITING_APPROVAL)
             return
         status = state.get("status", "FAILED")
         if status == "COMPLETED":

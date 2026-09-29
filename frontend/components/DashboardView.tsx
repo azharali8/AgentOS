@@ -42,9 +42,9 @@ import { AgentOSClient } from '../lib/api';
 import { WorkspaceSettings } from '../hooks/useWorkspaceSettings';
 import { useTaskEventStream } from '../hooks/useTaskEventStream';
 import { EngineeringStream } from './EngineeringStream';
-import { shouldFollowStream } from '../lib/engineering-stream';
+import { shouldFollowStream, isChangeSummaryRequest, recordedChangeSummary } from '../lib/engineering-stream';
 import { ModelSelector } from './ModelSelector';
-import { BrowserSpeech } from '../lib/browser-speech';
+import { VoiceControl } from './voice/VoiceControl';
 import { Attachment, ACCEPTED_CONTEXT, readAttachment, shouldSubmit } from '../lib/composer';
 
 interface DashboardViewProps {
@@ -75,10 +75,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [submittedTask, setSubmittedTask] = useState<Task|null>(null);
   const [previousTurns,setPreviousTurns] = useState<{task:Task;events:any[];artifacts:any[]}[]>([]);
   const [pendingInstruction,setPendingInstruction] = useState('');
+  const [changeExplanation,setChangeExplanation] = useState<{question:string;answer:string}|null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(initialSelectedTaskId || null);
   
   // Accordion state: exactly one open at a time; all collapsed by default
-  const [openAccordion, setOpenAccordion] = useState<'profile' | 'visualization' | 'settings' | null>(null);
+  const [openAccordion, setOpenAccordion] = useState<'profile' | 'visualization' | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Settings Modal (for Approve Permission, Models, Help, About)
   const [settingsModalTab, setSettingsModalTab] = useState<'permission' | 'models' | 'help' | 'about' | null>(null);
@@ -134,15 +136,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [isVoiceInputRecording, setIsVoiceInputRecording] = useState(false);
   const voiceInputRecognitionRef = useRef<any>(null);
 
-  // Live Voice Agent (Continuous hands-free AgentOS voice controller)
   const [isLiveAgentActive, setIsLiveAgentActive] = useState(false);
-  const [liveAgentState, setLiveAgentState] = useState<'listening' | 'understanding' | 'working' | 'speaking'>('listening');
-  const [liveSupervisorStage, setLiveSupervisorStage] = useState('');
-  const liveSocketRef = useRef<WebSocket | null>(null);
-  const liveAudioContextRef = useRef<AudioContext | null>(null);
-  const liveStreamRef = useRef<MediaStream | null>(null);
-  const liveWorkletRef = useRef<AudioWorkletNode | null>(null);
-  const browserSpeechRef = useRef<BrowserSpeech | null>(null);
 
   // Scroll & Viewport state
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -251,6 +245,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     setModalError(null);
     try {
       await client.setWorkspaceRoot(projectPathInput.trim(), projectNameInput.trim());
+      setChangeExplanation(null); setComposerError('');
+      setActiveTaskId(null); setSubmittedTask(null); setPreviousTurns([]);
+      setTaskArtifacts([]); setPendingApproval(null);
+      setSelectedFilePath(null); setFileContent(null); setShowFileDrawer(false);
+      setInputText(''); setAttachments([]);
       setShowProjectModal(false);
       setProjectPathInput('');
       setProjectNameInput('');
@@ -270,6 +269,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     setProjectMenuOpen(false);
     try {
       await client.disconnectWorkspace();
+      setChangeExplanation(null); setComposerError('');
+      setActiveTaskId(null); setSubmittedTask(null); setPreviousTurns([]);
+      setTaskArtifacts([]); setPendingApproval(null); setShowFileDrawer(false);
+      setInputText(''); setAttachments([]);
       setConnectedPath('');
       setGitBranch('main');
       setFilesCount(0);
@@ -278,8 +281,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       setFileContent(null);
       await loadProjectInfo();
       onRefresh();
-    } catch (err) {
-      console.error('Failed to disconnect workspace:', err);
+    } catch (err: any) {
+      setComposerError(err.message || 'Could not disconnect. Finish or cancel active tasks first.');
     } finally {
       setIsDisconnecting(false);
     }
@@ -333,9 +336,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // Submit task from composer
   const handleSubmitTask = async (textOverride?: string) => {
     const textToSubmit = (textOverride || inputText).trim();
-    if (!textToSubmit || isSubmitting) return;
+    if (!textToSubmit || isSubmitting || preferences.busy) return;
+
+    // A request to explain the recorded work is read-only, never a new coding task.
+    if (isChangeSummaryRequest(textToSubmit)) {
+      if (!activeTaskId) { setComposerError('Select a task before asking about its changes.'); return; }
+      setIsSubmitting(true); setComposerError('');
+      try {
+        const [record,events] = await Promise.all([client.getTask(activeTaskId),client.getTaskEvents(activeTaskId)]);
+        setChangeExplanation({question:textToSubmit,answer:recordedChangeSummary(record,events)});
+        setInputText('');
+      } catch { setComposerError('Recorded task evidence is unavailable. No changes were made.'); }
+      finally { setIsSubmitting(false); }
+      return;
+    }
 
     setIsSubmitting(true);
+    setChangeExplanation(null);
     setPendingInstruction(textToSubmit);
     setComposerError('');
     try {
@@ -377,15 +394,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         };
         recognition.onresult = (event: any) => {
           const current = event.resultIndex;
-          const transcript = event.results[current][0].transcript;
-          setInputText((prev) => {
-            return transcript;
-          });
           if (event.results[current].isFinal) {
+            setInputText(event.results[current][0].transcript);
             setIsVoiceInputRecording(false);
           }
         };
         recognition.onerror = () => {
+          setComposerError('Dictation failed. Check microphone access or type your request.');
           setIsVoiceInputRecording(false);
         };
         recognition.onend = () => {
@@ -393,83 +408,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         };
         recognition.start();
       } else {
-        // Fallback for browsers without Web Speech API
-        setIsVoiceInputRecording(true);
-        setTimeout(() => {
-          setInputText('Run the tests for this project and find the bugs');
-          setIsVoiceInputRecording(false);
-        }, 1200);
+        setComposerError('Dictation is unavailable in this browser. Use a browser with speech recognition or type your request.');
       }
     } catch {
       setIsVoiceInputRecording(false);
+      setComposerError('Unable to start dictation. Check microphone access or type your request.');
     }
   };
 
-  // 2. LIVE VOICE AGENT (Continuous hands-free AgentOS Voice Agent controller)
-  const stopLiveAgent = useCallback(() => {
-    if (liveSocketRef.current) {
-      liveSocketRef.current.send('{"type":"Stop"}');
-      liveSocketRef.current.close();
-      liveSocketRef.current = null;
-    }
-    if (liveStreamRef.current) {
-      liveStreamRef.current.getTracks().forEach((t) => t.stop());
-      liveStreamRef.current = null;
-    }
-    if (liveAudioContextRef.current) {
-      void liveAudioContextRef.current.close().catch(() => {});
-      liveAudioContextRef.current = null;
-    }
-    if (browserSpeechRef.current) {
-      browserSpeechRef.current.stop();
-    }
-    setIsLiveAgentActive(false);
-    setLiveAgentState('listening');
-    setLiveSupervisorStage('');
-  }, []);
-
-  const startLiveAgent = async () => {
-    if (isLiveAgentActive) {
-      stopLiveAgent();
-      return;
-    }
-
-    setIsLiveAgentActive(true);
-    setLiveAgentState('listening');
-    setLiveSupervisorStage('Initializing voice agent...');
-
-    try {
-      const sessionId = `live-session-${Date.now()}`;
-      const socket = client.openVoiceStream(sessionId, 'live');
-      liveSocketRef.current = socket;
-
-      socket.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          if (message.type === 'Turn' && message.end_of_turn && message.transcript) {
-            setLiveAgentState('understanding');
-            void handleSubmitTask(message.transcript);
-          } else if (message.type === 'FinalTranscript' && message.text) {
-            setLiveAgentState('understanding');
-            void handleSubmitTask(message.text);
-          }
-        } catch {}
-      };
-
-      socket.onclose = () => {
-        setIsLiveAgentActive(false);
-      };
-    } catch {
-      setIsLiveAgentActive(false);
-    }
-  };
-
-  // Clean up Live Agent on unmount
-  useEffect(() => {
-    return () => {
-      stopLiveAgent();
-    };
-  }, [stopLiveAgent]);
+  useEffect(() => () => { voiceInputRecognitionRef.current?.abort(); }, []);
 
   const hasActiveConversation = !!activeTask || !!pendingInstruction;
 
@@ -519,13 +466,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
           </nav>
 
-          <hr className="theme-border my-2" />
+        </div>
 
-          {/* Accordion Group (Default: Collapsed, single active section) */}
-          <div className="space-y-2 px-1 text-xs">
+        {/* Settings stays anchored below the primary navigation. */}
+        <div className="mt-auto pt-4 min-h-0 flex flex-col">
+          <div className="px-2 pb-4 shrink-0">
+            <div className="w-8 h-1 bg-indigo-500 rounded-full mb-2" />
+            <p className="text-[11px] text-slate-400 leading-snug">
+              Build Better Software<br />Together
+            </p>
+          </div>
+          {settingsOpen && (
+            <div id="sidebar-settings" className="space-y-2 px-1 py-3 text-xs border-t theme-border overflow-y-auto min-h-0 max-h-[60vh]">
             {/* Profile Accordion */}
             <div className="space-y-1">
               <button
+                aria-expanded={openAccordion === 'profile'}
                 onClick={() => setOpenAccordion(openAccordion === 'profile' ? null : 'profile')}
                 className="w-full flex items-center justify-between theme-text-primary font-medium py-1.5 px-2 rounded-lg hover:theme-bg-secondary transition-colors"
               >
@@ -558,6 +514,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {/* Visualization Accordion (Theme) */}
             <div className="space-y-1">
               <button
+                aria-expanded={openAccordion === 'visualization'}
                 onClick={() => setOpenAccordion(openAccordion === 'visualization' ? null : 'visualization')}
                 className="w-full flex items-center justify-between theme-text-primary font-medium py-1.5 px-2 rounded-lg hover:theme-bg-secondary transition-colors"
               >
@@ -631,25 +588,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               )}
             </div>
 
-            {/* Settings Accordion */}
-            <div className="space-y-1">
-              <button
-                onClick={() => setOpenAccordion(openAccordion === 'settings' ? null : 'settings')}
-                className="w-full flex items-center justify-between theme-text-primary font-medium py-1.5 px-2 rounded-lg hover:theme-bg-secondary transition-colors"
-              >
-                <div className="flex items-center space-x-2">
-                  <SettingsIcon className="w-4 h-4 text-slate-400" />
-                  <span>Settings</span>
-                </div>
-                {openAccordion === 'settings' ? (
-                  <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-                ) : (
-                  <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                )}
-              </button>
-
-              {openAccordion === 'settings' && (
-                <div className="pl-6 pt-1 space-y-2 theme-text-muted animate-in fade-in duration-100">
+              <div className="pl-3 pt-2 space-y-3 theme-text-muted border-t theme-border">
                   <button
                     onClick={() => setSettingsModalTab('permission')}
                     className="flex items-center space-x-2 hover:text-indigo-600 text-xs w-full text-left"
@@ -678,18 +617,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
                     <span>About</span>
                   </button>
-                </div>
-              )}
+              </div>
             </div>
-          </div>
-        </div>
-
-        {/* Sidebar Footer */}
-        <div className="pt-4 px-2">
-          <div className="w-8 h-1 bg-indigo-500 rounded-full mb-2" />
-          <p className="text-[11px] text-slate-400 leading-snug">
-            Build Better Software<br />Together
-          </p>
+          )}
+          <button
+            type="button"
+            aria-expanded={settingsOpen}
+            aria-controls="sidebar-settings"
+            onClick={() => setSettingsOpen(!settingsOpen)}
+            className="w-full shrink-0 flex items-center justify-between theme-text-primary font-medium text-xs py-2 px-3 rounded-xl hover:theme-bg-secondary transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <SettingsIcon className="w-4 h-4 text-slate-400" />
+              Settings
+            </span>
+            {settingsOpen ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
+          </button>
         </div>
       </aside>
 
@@ -738,6 +681,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </div>
                 </div>
 
+                {changeExplanation&&<section aria-label="Explanation from recorded evidence" className="space-y-3"><p className="theme-bg-secondary rounded-2xl px-4 py-3 text-sm">{changeExplanation.question}</p><pre className="whitespace-pre-wrap break-words text-sm theme-text-primary">{changeExplanation.answer}</pre></section>}
                 <div ref={messagesEndRef} />
               </div>
             )}
@@ -757,25 +701,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* 3. LOCKED COMMAND COMPOSER & PROJECT CONTROL ABOVE IT */}
         <div className="w-full max-w-3xl mx-auto px-4 pb-6 pt-1 z-20 shrink-0">
-          {/* Live Agent Banner when active */}
-          {isLiveAgentActive && (
-            <div className="mb-2 p-2.5 theme-bg-surface border-2 border-indigo-500/40 rounded-xl shadow-md flex items-center justify-between text-xs animate-in fade-in duration-150">
-              <div className="flex items-center space-x-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
-                <span className="font-bold text-indigo-600">AgentOS Live</span>
-                <span className="theme-text-muted">·</span>
-                <span className="theme-text-primary capitalize">{liveAgentState}...</span>
-              </div>
-              <button
-                type="button"
-                onClick={stopLiveAgent}
-                className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 font-semibold rounded-lg transition-colors text-[11px]"
-              >
-                End Live
-              </button>
-            </div>
-          )}
-
           {/* Voice Input recording indicator banner */}
           {isVoiceInputRecording && (
             <div className="mb-2 p-2 bg-rose-500/10 border border-rose-500/30 rounded-xl flex items-center space-x-2 text-xs text-rose-600 animate-pulse">
@@ -841,7 +766,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           {/* Locked Main Composer Box (Clean: Only [+] on left, Model / 🎙 / Live / Send on right) */}
-          <div className="theme-bg-surface border theme-border rounded-2xl shadow-xl shadow-black/5 p-3.5 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-400/10 transition-all">
+          <div className="workspace-composer relative theme-bg-surface border theme-border rounded-2xl shadow-xl shadow-black/5 p-3.5 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-400/10 transition-all">
             {/* Attached file chips */}
             {attachments.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pb-2 border-b theme-border-subtle">
@@ -885,7 +810,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             />
 
             {/* Bottom Toolbar: Left ONLY [+] | Right: Model Selector, 🎙 Mic, Live Agent, Send */}
-            <div className="flex items-center justify-between pt-2 border-t theme-border-subtle">
+            <div className="flex flex-wrap gap-2 items-center justify-between pt-2 border-t theme-border-subtle">
               {/* Left Group: ONLY [+] Button */}
               <div className="relative" ref={plusMenuRef}>
                 <button
@@ -965,7 +890,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
 
               {/* Right Group: Model Selector | 🎙 Mic (Voice Input) | Live Agent | Send */}
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {/* Model Selector pill */}
                 <div className="theme-bg-secondary border theme-border rounded-full px-2 py-0.5 text-xs theme-text-primary">
                   <ModelSelector preferences={preferences} disabled={isSubmitting} />
@@ -975,6 +900,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <button
                   type="button"
                   onClick={toggleVoiceInput}
+                  disabled={isLiveAgentActive}
                   className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all ${
                     isVoiceInputRecording
                       ? 'bg-rose-500/20 border-rose-500 text-rose-600 animate-pulse'
@@ -986,27 +912,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <Mic className="w-4 h-4" />
                 </button>
 
-                {/* Live Voice Agent Control */}
-                <button
-                  type="button"
-                  onClick={startLiveAgent}
-                  className={`flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                    isLiveAgentActive
-                      ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
-                      : 'theme-bg-surface theme-border theme-text-muted hover:theme-text-primary hover:theme-bg-secondary'
-                  }`}
-                  title="Live Voice Agent (continuous hands-free conversation)"
-                  aria-label="Live Voice Agent"
-                >
-                  <AudioLines className="w-3.5 h-3.5" />
-                  <span className="text-[11px]">Live</span>
-                  <ChevronDown className="w-3 h-3 text-slate-400" />
-                </button>
+                <VoiceControl client={client} liveOnly readAloud={preferences.readAloud}
+                  disabled={isVoiceInputRecording || isSubmitting}
+                  onActiveChange={setIsLiveAgentActive}
+                  onTaskCreated={(taskId) => { setActiveTaskId(taskId); onRefresh(); }}
+                />
 
                 {/* Circular Send Button */}
                 <button
                   type="button"
-                  disabled={!inputText.trim() || isSubmitting}
+                  disabled={!inputText.trim() || isSubmitting || preferences.busy}
                   onClick={() => handleSubmitTask()}
                   className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-30 disabled:hover:bg-indigo-600 text-white flex items-center justify-center transition-all shadow-md shrink-0"
                   title="Send"
@@ -1016,6 +931,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </button>
               </div>
             </div>
+
+            {(activeTask?.status==='PAUSED' && streamEvents.some(e=>e.event_type==='MODEL_POOL_EXHAUSTED') || !activeTaskId && preferences.models?.active_model==='AGENTOS_AUTO' && preferences.models?.cloud_status==='CLOUD_POOL_EXHAUSTED') && (
+              <div role="alert" className="text-xs theme-text-primary mt-2">
+                <p>AgentOS cloud capacity is currently unavailable. Select a local model to continue.</p>
+                <button type="button" onClick={()=>document.querySelector<HTMLButtonElement>('[aria-label="Active AI model"]')?.click()}>Select Local Model</button>
+                {activeTask?.status==='PAUSED' && <button type="button" disabled={isSubmitting} onClick={async()=>{setIsSubmitting(true);try{await client.resumeModelTask(activeTask.task_id);onRefresh();}catch{setComposerError('Could not resume from the saved model checkpoint.');}finally{setIsSubmitting(false);}}}>Continue with selected model</button>}
+                <button type="button" disabled={isSubmitting} onClick={async()=>{if(!await preferences.select('AGENTOS_AUTO'))return;await preferences.refresh();if(activeTask?.status==='PAUSED'){setIsSubmitting(true);try{await client.resumeModelTask(activeTask.task_id);onRefresh();}catch{setComposerError('Cloud capacity remains unavailable.');}finally{setIsSubmitting(false);}}}}>Retry Cloud</button>
+              </div>
+            )}
 
             {composerError && (
               <p className="text-xs text-rose-600 pt-1.5" role="alert">

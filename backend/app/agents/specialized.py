@@ -228,8 +228,15 @@ class CodingAgent:
         )
         from backend.app.llm.structured import GeneratedFiles, generate_structured
         from backend.app.llm.proposal_validation import validate_python_proposal
+        import re
+        workspace_files = self.intelligence.get_first_workspace_files(max_files=settings.MAX_REPOSITORY_FILES)
+        require_tests = (
+            bool(re.search(r"\b(?:add|write|create|include)\b[^.\n]{0,100}\btests?\b", subtask.description, re.I))
+            and any(name.endswith(".py") for name in workspace_files)
+            and not any(Path(name).name.startswith("test_") or Path(name).name.endswith("_test.py") for name in workspace_files)
+        )
         changes = generate_structured(self.llm, prompt, GeneratedFiles,
-                                      validate=lambda proposal: validate_python_proposal(proposal, originals)).model_dump()["files"]
+                                      validate=lambda proposal: validate_python_proposal(proposal, originals, require_tests=require_tests)).model_dump()["files"]
         if not isinstance(changes, list) or not changes or len(changes) > settings.MAX_PATCH_FILES:
             raise ValueError("Coding model must return a bounded, nonempty files list")
         unread = []

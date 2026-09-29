@@ -25,7 +25,7 @@ export function engineeringEntries(task:Task,events:TaskEvent[],artifacts:Artifa
   const p=e.payload||{};const type=e.event_type;const base={time:e.timestamp,state:'done' as const};
   if(type==='TASK_CREATED')add({...base,id:'received',kind:'action',title:'Request received'});
   else if(type==='PLAN_CREATED')add({...base,id:'plan',kind:'action',title:'Planning work',state:events.some(x=>x.event_type==='SUBTASK_CREATED')?'done':'active'});
-  else if(type==='MODEL_SELECTED')add({...base,id:'model',kind:'metadata',title:`Model: ${safeDisplay(p.model)}`});
+  else if(type==='MODEL_SELECTED')add({...base,id:'model',kind:'metadata',title:p.mode==='AUTO_CLOUD'||p.model==='AGENTOS_AUTO'?'AgentOS Auto':`Local · ${safeDisplay(p.model)}`});
   else if(type==='FILE_READ')add({...base,id:`read:${p.subtask_id||p.agent||''}:${p.path}`,kind:'file',title:`Read ${safeDisplay(p.path)}`,data:{path:p.path}});
   else if(type==='SUBTASK_STARTED'||type==='SUBTASK_COMPLETED'||type==='SUBTASK_FAILED'){
    const agent=String(p.agent||p.agent_type||'agent').toLowerCase();const id=`subtask:${p.subtask_id||e.step_id||e.event_id}`;
@@ -55,4 +55,10 @@ export function engineeringEntries(task:Task,events:TaskEvent[],artifacts:Artifa
  if(stopped)for(const r of rows)if(r.state==='active'){r.state=task.status==='FAILED'?'failed':'done';}
  if(taskIsTerminal(task.status))add({id:'final',time:task.completed_at||task.updated_at||ordered[ordered.length-1]?.e.timestamp||task.created_at,kind:'final',title:task.status==='COMPLETED'?'Work completed':task.status==='FAILED'?'Execution stopped':'Task cancelled',state:task.status==='COMPLETED'?'done':'failed',detail:safeDisplay(task.error||task.result_summary)});
  return rows.sort((a,b)=>Date.parse(a.time)-Date.parse(b.time));
+}
+export const isChangeSummaryRequest = (text:string) => /^(?:explain|describe|summari[sz]e)\s+(?:what you changed|(?:the |your )?changes)[.!?]*$/i.test(text.trim());
+
+export function recordedChangeSummary(task:Task, events:TaskEvent[]):string {
+ const files=Array.from(new Set(events.filter(e=>e.task_id===task.task_id&&e.event_type==='PATCH_APPLIED'&&e.payload?.applied===true).flatMap(e=>e.payload?.files||e.payload?.modified_files||[])));
+ return safeDisplay(`Recorded outcome: ${task.status}\nApplied files: ${files.length?files.join(', '):'No applied changes recorded.'}\n${task.result_summary||task.error||'No final summary is available yet.'}`);
 }

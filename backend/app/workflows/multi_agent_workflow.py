@@ -55,29 +55,59 @@ def _route_after_approval(state: MultiAgentState) -> str:
     return "parallel_execution"
 
 
+def _capacity_boundary(node, name):
+    """Checkpoint exhaustion before asking for a selection; never replay cloud first."""
+    def run(state):
+        from backend.app.services.cloud_model_pool import CloudPoolExhausted
+        try:
+            return node(state)
+        except CloudPoolExhausted:
+            return {'capacity_node': name, 'status': 'PAUSED'}
+    return run
+
+
+def _resume_capacity_node(state):
+    from langgraph.types import interrupt, Command
+    choice = interrupt({'kind': 'cloud_capacity', 'code': 'CLOUD_POOL_EXHAUSTED',
+                        'message': 'AgentOS cloud capacity is currently unavailable. Select a local model to continue.'})
+    if not isinstance(choice, dict) or not isinstance(choice.get('model_selection'), str):
+        raise ValueError('Capacity continuation requires an explicit model selection')
+    target = state.get('capacity_node')
+    if target not in ('decompose_task', 'parallel_execution', 'security_review', 'merge_results'):
+        raise ValueError('Invalid capacity checkpoint destination')
+    return Command(update={'selected_model': choice['model_selection'], 'capacity_node': None,
+                           'status': 'EXECUTING'}, goto=target)
+
+
+def _capacity_or(next_node):
+    return lambda state: 'resume_capacity' if state.get('capacity_node') else next_node
+
+
 def build_multi_agent_graph() -> StateGraph:
     """Construct the StateGraph for multi-agent collaboration."""
     workflow = StateGraph(MultiAgentState)
 
+    workflow.add_node("resume_capacity", _resume_capacity_node)
     workflow.add_node("supervisor_plan", supervisor_plan_node)
-    workflow.add_node("decompose_task", decompose_task_node)
-    workflow.add_node("parallel_execution", parallel_execution_node)
+    workflow.add_node("decompose_task", _capacity_boundary(decompose_task_node, "decompose_task"))
+    workflow.add_node("parallel_execution", _capacity_boundary(parallel_execution_node, "parallel_execution"))
     workflow.add_node("human_approval", human_approval_node)
-    workflow.add_node("security_review", security_review_node)
-    workflow.add_node("merge_results", merge_results_node)
+    workflow.add_node("security_review", _capacity_boundary(security_review_node, "security_review"))
+    workflow.add_node("merge_results", _capacity_boundary(merge_results_node, "merge_results"))
     workflow.add_node("final_response", final_response_node)
 
     workflow.add_edge(START, "supervisor_plan")
     workflow.add_edge("supervisor_plan", "decompose_task")
-    workflow.add_edge("decompose_task", "parallel_execution")
+    workflow.add_conditional_edges("decompose_task", _capacity_or("parallel_execution"))
 
     workflow.add_conditional_edges(
         "parallel_execution",
-        _route_after_execution,
+        lambda state: "resume_capacity" if state.get("capacity_node") else _route_after_execution(state),
         {
             "parallel_execution": "parallel_execution",
             "human_approval": "human_approval",
             "security_review": "security_review",
+            "resume_capacity": "resume_capacity",
             "final_response": "final_response",
         },
     )
@@ -91,8 +121,8 @@ def build_multi_agent_graph() -> StateGraph:
         },
     )
 
-    workflow.add_edge("security_review", "merge_results")
-    workflow.add_edge("merge_results", "final_response")
+    workflow.add_conditional_edges("security_review", _capacity_or("merge_results"))
+    workflow.add_conditional_edges("merge_results", _capacity_or("final_response"))
     workflow.add_edge("final_response", END)
 
     return workflow

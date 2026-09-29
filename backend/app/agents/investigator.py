@@ -103,6 +103,9 @@ class CodeInvestigatorAgent:
             parsed = json.loads(text)
             return InvestigationResult(**parsed)
         except Exception as exc:
+            from backend.app.services.cloud_model_pool import CloudPoolExhausted
+            if isinstance(exc, CloudPoolExhausted):
+                raise
             logger.warning("Investigation LLM synthesis error: %s", exc)
             return InvestigationResult(
                 affected_files=affected_files or [],

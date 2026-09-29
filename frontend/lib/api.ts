@@ -78,6 +78,7 @@ export class AgentOSClient {
     await this.request('/api/v1/auth/register', {method:'POST',body:JSON.stringify({email,username,password}),signal:AbortSignal.timeout(15000)});
   }
 
+  async resumeModelTask(taskId:string):Promise<Task> {return this.request(`/api/v1/tasks/${taskId}/resume-model`,{method:'POST'});}
   async localModels(): Promise<LocalModels> { return this.request('/api/v1/system/local-models',{cache:'no-store',signal:AbortSignal.timeout(30000)}); }
   async selectLocalModel(model:string): Promise<LocalModels> { return this.request('/api/v1/system/local-models',{method:'PUT',body:JSON.stringify({model}),signal:AbortSignal.timeout(30000)}); }
 
@@ -333,4 +334,4 @@ export class AgentOSClient {
 }
 
 
-export interface LocalModels { models: {name:string;cloud?:boolean;size:number;selectable:boolean;status:string;recommended:boolean}[]; active_model:string; provider:string; status:string; selection_enabled:boolean; }
+export interface LocalModels { cloud_status?:string; models: {name:string;cloud?:boolean;size:number;selectable:boolean;status:string;recommended:boolean}[]; active_model:string; provider:string; status:string; selection_enabled:boolean; }

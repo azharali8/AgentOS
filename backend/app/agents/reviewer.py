@@ -106,6 +106,9 @@ class ReviewerAgent:
                    if self.strict else self.llm.generate(prompt))
             return _parse_verdict(raw)
         except Exception as exc:
+            from backend.app.services.cloud_model_pool import CloudPoolExhausted
+            if isinstance(exc, CloudPoolExhausted):
+                raise
             if self.strict:
                 return "RETRYABLE", f"Model review unavailable: {exc}"
             logger.warning("Reviewer generation/parse failed, using deterministic fallback: %s", exc)

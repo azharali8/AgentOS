@@ -36,7 +36,7 @@ test('settings and Workspace share a visible model menu with exact model selecti
  assert.equal(find(menu,n=>n.props.role==='option'&&n.props.children[0].props.children==='embed'),null);
  find(menu,n=>n.props.role==='option'&&n.props.children[0].props.children==='other:3b').props.onClick();assert.equal(selected,'other:3b');
  preferences.models.active_model=selected;menu=render();assert.equal(find(menu,n=>n.props.role==='listbox'),null);
- assert.ok(find(menu,n=>n.type==='span'&&n.props.children==='other:3b'));
+ assert.ok(find(menu,n=>n.type==='span'&&n.props.children==='Local · other:3b'));
 });
 
 test('model picker exposes loading and retry instead of an invisible disabled selector',()=>{
@@ -48,7 +48,7 @@ test('model picker exposes loading and retry instead of an invisible disabled se
  tree=render();find(tree,n=>n.props.className==='model-refresh').props.onClick();assert.equal(refreshed,1);
 });
 
-async function voiceHarness(){
+async function voiceHarness(props={}){
  const h=hooks(),sent=[],spoken=[],tracks=[];let cancelled=0;const sockets=[];
  const track={stop(){tracks.push('stopped');},onended:null};
  const media={getTracks:()=>[track],getAudioTracks:()=>[track]};
@@ -58,7 +58,7 @@ async function voiceHarness(){
  const stream=load('../lib/voice-stream.ts');const speech=load('../lib/browser-speech.ts',{},globals);
  const {VoiceControl}=load('../components/voice/VoiceControl.tsx',{'react':h.react,'lucide-react':new Proxy({},{get:()=>()=>null}),'../../lib/api':{},'../../lib/voice-stream':stream,'../../lib/browser-speech':speech},globals);
  const client={openVoiceStream(id,mode){const ws={mode,readyState:1,bufferedAmount:0,send:m=>sent.push(m),close(){}};sockets.push(ws);return ws;}};
- const render=()=>h.render(()=>VoiceControl({client}));render();h.flush();
+ const render=()=>h.render(()=>VoiceControl({client,...props}));render();h.flush();
  return {render,h,sockets,spoken,tracks,sent,cancelled:()=>cancelled,settle:()=>new Promise(setImmediate)};
 }
 test('one-shot microphone releases audio at final and never speaks or replays duplicate results',async()=>{
@@ -102,4 +102,43 @@ test('provider turn numbering resets on reconnect and partial speech interrupts 
  event({type:'Begin'});complete();assert.equal(v.spoken.length,1);
  const before=v.cancelled();event({type:'Turn',transcript:'Another',end_of_turn:false,turn_order:1});assert.ok(v.cancelled()>before);assert.equal(v.spoken.length,1);
  event({type:'Begin'});complete();assert.equal(v.spoken.length,2);
+});
+
+
+test('workspace Live control hides command microphone and reports only backend-created tasks',async()=>{
+ const ids=[];const v=await voiceHarness({liveOnly:true,onTaskCreated:id=>ids.push(id)});
+ assert.equal(find(v.render(),n=>n.props['aria-label']==='One-shot voice command'),null);
+ find(v.render(),n=>n.props['aria-label']==='Start Live Voice').props.onClick();await v.settle();
+ const ws=v.sockets[0];const event=m=>ws.onmessage({data:JSON.stringify(m)});
+ event({type:'Begin'});event({type:'Turn',transcript:'Run tests',end_of_turn:false,turn_order:0});
+ event({type:'Turn',transcript:'Run tests',end_of_turn:true,turn_order:0});assert.deepEqual(ids,[]);
+ event({type:'Result',turn_order:0,task_id:'actual-task',status:'completed',tts_summary:'Done'});
+ event({type:'Result',turn_order:0,task_id:'actual-task',status:'completed',tts_summary:'Done'});
+ assert.deepEqual(ids,['actual-task']);
+});
+
+
+test('Auto is always offered and cloud names never become manual options',()=>{
+ const h=hooks();let selected='';
+ const {ModelSelector}=load('../components/ModelSelector.tsx',{'react':h.react,'../lib/model-label':load('../lib/model-label.ts')});
+ const preferences={busy:false,error:'',refresh(){},select:m=>{selected=m;},models:{active_model:'AGENTOS_AUTO',selection_enabled:true,status:'online',models:[{name:'cloud:cloud',cloud:true,selectable:true},{name:'coder:3b',cloud:false,selectable:true},{name:'embed',selectable:false}]}};
+ const render=()=>h.render(()=>ModelSelector({preferences}));
+ find(render(),n=>n.props['aria-haspopup']==='listbox').props.onClick();let tree=render();
+ assert.equal(find(tree,n=>n.props.role==='option'&&n.props.children[0].props.children==='cloud'),null);
+ const auto=find(tree,n=>n.props.role==='option'&&n.props.children[0].props.children==='AgentOS Auto');assert.ok(auto);assert.equal(auto.props['aria-selected'],true);
+ find(tree,n=>n.props.role==='option'&&n.props.children[0].props.children==='coder:3b').props.onClick();assert.equal(selected,'coder:3b');
+ find(render(),n=>n.props['aria-haspopup']==='listbox').props.onClick();preferences.models.status='offline';tree=render();
+ const retry=find(tree,n=>n.props.role==='option'&&n.props.children[0].props.children==='AgentOS Auto');assert.equal(retry.props.disabled,false);retry.props.onClick();assert.equal(selected,'AGENTOS_AUTO');
+});
+
+test('model selection reports failure and preserves the previous active model',async()=>{
+ const h=hooks();let reject;
+ const {useWorkspaceSettings}=load('../hooks/useWorkspaceSettings.ts',{'react':h.react,'../lib/api':{},'../lib/theme':theme});
+ const client={selectLocalModel:async()=>({active_model:'coder:3b'})};
+ const render=()=>h.render(()=>useWorkspaceSettings(client,false));
+ assert.equal(await render().select('coder:3b'),true);
+ client.selectLocalModel=()=>new Promise((_,r)=>reject=r);
+ const pending=render().select('AGENTOS_AUTO');assert.equal(render().busy,true);
+ reject(new Error('offline'));assert.equal(await pending,false);
+ assert.equal(render().models.active_model,'coder:3b');assert.equal(render().busy,false);assert.match(render().error,/selection failed/);
 });

@@ -155,7 +155,7 @@ def test_empty_existing_directory_allowed(tmp_path):
 def test_create_project_makes_directory(tmp_path):
     parent = _make_parent(tmp_path)
     with patch("backend.app.services.project_creator.settings") as mock_settings, \
-         patch("os.environ"):
+         patch.dict(os.environ, {}, clear=False):
         mock_settings.WORKSPACE_ROOT = ""
 
         from backend.app.config.settings import PROJECT_ROOT as real_root
@@ -176,7 +176,7 @@ def test_create_project_makes_directory(tmp_path):
 def test_create_project_writes_base_files(tmp_path):
     parent = _make_parent(tmp_path)
     with patch("backend.app.services.project_creator.settings") as mock_settings, \
-         patch("os.environ"):
+         patch.dict(os.environ, {}, clear=False):
         mock_settings.WORKSPACE_ROOT = ""
 
         from backend.app.config.settings import PROJECT_ROOT as real_root
@@ -209,7 +209,7 @@ def test_create_project_updates_workspace_root(tmp_path):
         pc_module.settings = mock_settings
 
         try:
-            with patch("os.environ"):
+            with patch.dict(os.environ, {}, clear=False):
                 ProjectCreatorService.create_project(
                     name="RootSwitchApp",
                     location=str(parent),
@@ -230,7 +230,7 @@ def test_create_project_skips_git_gracefully(tmp_path):
 
     try:
         with patch("backend.app.services.project_creator.PROJECT_ROOT", str(real_root)):
-            with patch("os.environ"), \
+            with patch.dict(os.environ, {}, clear=False), \
                  patch("subprocess.run", side_effect=FileNotFoundError("git not found")):
                 result = ProjectCreatorService.create_project(
                     name="NoGitApp",

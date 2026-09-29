@@ -110,6 +110,12 @@ class TestingAgent:
             evidence["execution_failed"] = True
             status = AgentStatus.FAILED
         evidence["error_type"] = "WORKFLOW_ERROR" if evidence.get("execution_failed") else "TEST_FAILURE" if not evidence.get("passed") else None
+        execution_error = None
+        if evidence.get("execution_failed"):
+            data = evidence.get("test_results", {})
+            detail = "pytest collected no tests (exit 5)" if framework == "pytest" and data.get("exit_code") == 5 else "test runner infrastructure failed; inspect captured output"
+            execution_error = f"WORKFLOW_ERROR: {detail}"
+            summary = execution_error
         AgentBudgetTracker.record_token_usage(task_id, 200, AgentType.TESTING)
 
         return AgentResult(
@@ -118,7 +124,7 @@ class TestingAgent:
             status=status,
             summary=summary,
             evidence=evidence,
-            error=("WORKFLOW_ERROR: test runner infrastructure failed" if evidence.get("execution_failed") else None),
+            error=execution_error,
         )
 
 

@@ -11,12 +11,13 @@ interface VoiceControlProps {
   onTaskCreated?: (taskId: string) => void;
   className?: string;
   compact?: boolean;
+  liveOnly?: boolean;
   readAloud?: boolean;
   onActiveChange?: (active:boolean)=>void;
   disabled?:boolean;
 }
 
-export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated, className = '',readAloud=true,onActiveChange,disabled=false}) => {
+export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated, className = '',liveOnly=false,readAloud=true,onActiveChange,disabled=false}) => {
   const mode=useRef<'once'|'live'>('live');
   const results=useRef(new Set<number>());
   const [state, setState] = useState('idle');
@@ -207,9 +208,9 @@ export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated
 
   const label = state==='error' ? 'Voice request failed' : state==='completed' ? 'Command submitted' : speaking ? (active.current ? 'Speaking — listening for interruptions' : 'Speaking') : state === 'processing' ? 'Understanding request' : state === 'listening' ? 'Listening' : state === 'reconnecting' ? 'Reconnecting' : state === 'connecting' ? 'Connecting microphone' : 'Voice Supervisor';
   return <div className={`composer-voice ${className}`}>
-    <button type="button" className="composer-icon" aria-label={active.current&&mode.current==='once'?'Stop microphone':'One-shot voice command'} title="Speak one command" disabled={disabled&&!active.current || active.current&&mode.current!=='once'} onClick={()=>{if(active.current)stop();else void start('once');}}>{active.current&&mode.current==='once'?<Square size={18}/>:<Mic size={19}/>}</button>
-    <button type="button" className="composer-live" aria-label={active.current&&mode.current==='live'?'End Live Voice':'Start Live Voice'} title="Live Voice — continuous conversation" aria-pressed={active.current&&mode.current==='live'} disabled={disabled&&!active.current || active.current&&mode.current!=='live'} onClick={()=>{if(active.current)stop();else void start('live');}}>{active.current&&mode.current==='live'?<Square size={18}/>:<AudioLines size={20}/>}</button>
-    {open && <div className="composer-voice-status">
+    {!liveOnly && <button type="button" className="composer-icon" aria-label={active.current&&mode.current==='once'?'Stop microphone':'One-shot voice command'} title="Speak one command" disabled={disabled&&!active.current || active.current&&mode.current!=='once'} onClick={()=>{if(active.current)stop();else void start('once');}}>{active.current&&mode.current==='once'?<Square size={18}/>:<Mic size={19}/>}</button>}
+    <button type="button" className="composer-live flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border theme-bg-surface theme-border theme-text-primary" aria-label={active.current&&mode.current==='live'?'End Live Voice':'Start Live Voice'} title="Live Voice — continuous conversation" aria-pressed={active.current&&mode.current==='live'} disabled={disabled&&!active.current || active.current&&mode.current!=='live'} onClick={()=>{if(active.current)stop();else void start('live');}}>{active.current&&mode.current==='live'?<Square size={18}/>:<AudioLines size={20}/>}<span>Live</span></button>
+    {open && <div className="composer-voice-status absolute bottom-full left-0 right-0 mb-2 p-3 rounded-xl border theme-border theme-bg-surface theme-text-primary shadow-md">
       <div className="flex justify-between items-center gap-2 text-xs font-semibold" role="status" aria-live="polite">
         <span>{label}</span>
         {mode.current==='live' && readAloud && <button aria-label={muted ? 'Unmute speech' : 'Mute speech'} onClick={() => { setMuted(!muted); if (!muted) stopSpeech(); }}>
@@ -217,8 +218,8 @@ export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated
         </button>}
       </div>
       {transcript && <div><p className="text-[10px] text-slate-500">{final ? 'Confirmed turn' : 'Live transcript · not submitted'}</p><p className="text-sm break-words">{transcript}</p></div>}
-      {stage && <p className="text-xs font-semibold text-indigo-700" role="status">Supervisor · {stage}</p>}
-      {feedback && <p className="text-xs whitespace-pre-wrap break-words text-slate-700">{feedback}</p>}
+      {stage && <p className="text-xs font-semibold theme-text-primary" role="status">Supervisor · {stage}</p>}
+      {feedback && <p className="text-xs whitespace-pre-wrap break-words theme-text-primary">{feedback}</p>}
       {progressError && <p className="text-xs text-amber-700" role="alert">{progressError}</p>}
       {error && <p className="text-xs text-rose-700" role="alert">{error}</p>}
       <p className="text-[10px] text-slate-400">Audio streams to AssemblyAI. Completed turns submit automatically. Headphones help prevent speaker echo.</p>

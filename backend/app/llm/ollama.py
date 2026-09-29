@@ -11,9 +11,9 @@ _inference_slot = threading.BoundedSemaphore(1)
 
 
 class OllamaProvider(BaseLLMProvider):
-    def __init__(self):
+    def __init__(self, model: str | None = None):
         self.base_url = settings.OLLAMA_BASE_URL.rstrip("/")
-        self.model = settings.OLLAMA_MODEL
+        self.model = model or settings.OLLAMA_MODEL
 
     def check_available(self) -> None:
         try:

@@ -13,7 +13,7 @@ export function useWorkspaceSettings(client:AgentOSClient,authenticated:boolean)
  const setReadAloud=(value:boolean)=>{localStorage.setItem('agentos_read_aloud',String(value));setReadAloudState(value);};
  const refresh=useCallback(async()=>{if(!authenticated)return;setBusy(true);try{setModels(await client.localModels());setError('');}catch{setModels(null);setError('Unable to reach model settings. Check the backend connection.');}finally{setBusy(false);}},[client,authenticated]);
  useEffect(()=>{void refresh();},[refresh]);
- const select=async(model:string)=>{setBusy(true);try{setModels(await client.selectLocalModel(model));setError('');}catch{setError('Model selection failed. Check Ollama and refresh available models.');}finally{setBusy(false);}};
+ const select=async(model:string)=>{setBusy(true);try{setModels(await client.selectLocalModel(model));setError('');return true;}catch{setError('Model selection failed. Check Ollama and refresh available models.');return false;}finally{setBusy(false);}};
  return {theme,setTheme,readAloud,setReadAloud,models,error,busy,refresh,select};
 }
 export type WorkspaceSettings = ReturnType<typeof useWorkspaceSettings>;

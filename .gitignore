@@ -82,3 +82,6 @@ frontend/yarn-error.log*
 *~
 .DS_Store
 Thumbs.db
+
+# Account-specific, expiring model verification (contains local diagnostics).
+data/model-verification.json

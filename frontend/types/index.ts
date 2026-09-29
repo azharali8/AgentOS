@@ -19,7 +19,7 @@ export interface LoginResponse {
 
 export interface Task {
   task_id: string;
-  status: 'PENDING' | 'PLANNING' | 'RUNNING' | 'EXECUTING' | 'REVIEWING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'WAITING_APPROVAL';
+  status: 'PENDING' | 'PLANNING' | 'RUNNING' | 'EXECUTING' | 'REVIEWING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'PAUSED' | 'WAITING_APPROVAL';
   instruction: string;
   created_at: string;
   updated_at?: string;

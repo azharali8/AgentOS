@@ -60,6 +60,9 @@ class ParallelExecutor:
                         res = future.result()
                         results[st.subtask_id] = res
                     except Exception as exc:
+                        from backend.app.services.cloud_model_pool import CloudPoolExhausted
+                        if isinstance(exc, CloudPoolExhausted):
+                            raise
                         logger.error("Parallel execution error for subtask %s: %s", st.subtask_id, exc, exc_info=True)
                         results[st.subtask_id] = AgentResult(
                             subtask_id=st.subtask_id,

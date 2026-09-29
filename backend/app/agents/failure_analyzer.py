@@ -119,6 +119,9 @@ class FailureAnalyzerAgent:
             parsed = json.loads(text)
             return [FailureInfo(**parsed)]
         except Exception as exc:
+            from backend.app.services.cloud_model_pool import CloudPoolExhausted
+            if isinstance(exc, CloudPoolExhausted):
+                raise
             logger.warning("LLM failure analysis fallback error: %s", exc)
             return [FailureInfo(
                 test_name="unknown_test",

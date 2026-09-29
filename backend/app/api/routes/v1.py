@@ -209,6 +209,14 @@ def create_task(req: TaskCreateRequestV1, user: AuthenticatedUser = Depends(requ
     req.task = instruction_with_context(req.task, req.context.get("attachments"))
     task_req = TaskRequest(instruction=req.task)
     task_record = TaskService.create_task(request=task_req)
+    from backend.app.services.local_model_settings import model_preference
+    from backend.app.db.database import get_db_session
+    from backend.app.db.models import TaskModel
+    selection = model_preference(user.user_id)
+    with get_db_session() as db:
+        record = db.get(TaskModel, task_record.task_id)
+        record.task_metadata = {**(record.task_metadata or {}), 'model_selection': selection, 'model_owner': user.user_id}
+
     
     EventService.record_event(
         task_id=task_record.task_id,
@@ -398,6 +406,27 @@ def pause_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user)
     return {"task_id": task_id, "status": "PAUSED"}
 
 
+@tasks_v1.post("/{task_id}/resume-model")
+def resume_task_model(task_id: str, user: AuthenticatedUser = Depends(require_role(UserRole.USER))):
+    from backend.app.services.multi_agent_service import MultiAgentService
+    from backend.app.services.local_model_settings import model_preference, local_models
+    from backend.app.services.cloud_model_pool import AUTO
+    task = TaskService.get_task(task_id)
+    if not task:
+        raise HTTPException(404, 'Task not found')
+    if (task.metadata or {}).get('model_owner') != user.user_id and user.role != UserRole.ADMIN:
+        raise HTTPException(403, 'Task belongs to another user')
+    if task.status != TaskStatus.PAUSED:
+        raise HTTPException(409, 'Task is not paused')
+    selection = model_preference(user.user_id)
+    if selection != AUTO and not any(m['name'] == selection and m['selectable'] for m in local_models(user.user_id)['models']):
+        raise HTTPException(409, 'Select a verified available local model')
+    try:
+        return MultiAgentService.resume_capacity(task_id, selection).model_dump(mode='json')
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @tasks_v1.post("/{task_id}/resume")
 def resume_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
     """Resume a paused or interrupted task from durable checkpoint."""
@@ -408,6 +437,12 @@ def resume_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user
     if user.role != UserRole.ADMIN and getattr(task, "user_id", None) not in (None, user.user_id):
         raise HTTPException(status_code=403, detail="Unauthorized access to private task")
 
+    if task.status == TaskStatus.PAUSED:
+        from backend.app.services.multi_agent_service import get_multi_agent_graph
+        snapshot = get_multi_agent_graph().get_state({'configurable': {'thread_id': task_id}})
+        if any(isinstance(i.value, dict) and i.value.get('kind') == 'cloud_capacity'
+               for t in (snapshot.tasks or ()) for i in getattr(t, 'interrupts', ())):
+            raise HTTPException(status_code=409, detail='Select a model and use resume-model to resume cloud capacity recovery')
     from backend.app.services.task_runtime import TaskRuntime
     try:
         res = TaskRuntime.resume_task(task_id, user_id=user.user_id)
@@ -621,13 +656,13 @@ class LocalModelSelection(BaseModel):
 @system_v1.get('/local-models')
 def installed_local_models(user: AuthenticatedUser = Depends(get_current_user)):
     from backend.app.services.local_model_settings import local_models
-    return local_models()
+    return local_models(user.user_id)
 
 
 @system_v1.put('/local-models')
 def select_local_model(req: LocalModelSelection, user: AuthenticatedUser = Depends(require_role(UserRole.USER))):
     from backend.app.services.local_model_settings import select_model
-    return select_model(req.model)
+    return select_model(req.model, user.user_id)
 
 
 @system_v1.get("/models")
@@ -960,6 +995,8 @@ def set_workspace_root(
     import os
     from pathlib import Path
 
+    _require_idle_workspace()
+
     raw = req.path.strip()
 
     # Reject null bytes and UNC paths
@@ -1014,6 +1051,7 @@ def set_workspace_root(
     os.environ["WORKSPACE_ROOT"] = str(target)
 
     # Persist to .env file for across-restart durability (skipped during pytest)
+    persisted = False
     if "PYTEST_CURRENT_TEST" not in os.environ and getattr(settings, "APP_ENV", "") != "test":
         env_path = agentos_root / ".env"
         try:
@@ -1030,6 +1068,7 @@ def set_workspace_root(
                 env_path.write_text("".join(lines), encoding="utf-8")
             else:
                 env_path.write_text(f"WORKSPACE_ROOT={target}\n", encoding="utf-8")
+            persisted = True
         except Exception as exc:
             import logging
             logging.getLogger("agentos.workspace").warning(
@@ -1044,8 +1083,19 @@ def set_workspace_root(
         "path": str(target),
         "files_count": files_count,
         "dirs_count": dirs_count,
-        "persisted": env_path.exists(),
+        "persisted": persisted,
     }
+
+
+def _require_idle_workspace():
+    from backend.app.db.database import get_db_session
+    from backend.app.db.models import TaskModel
+    with get_db_session() as db:
+        active = db.query(TaskModel.task_id).filter(TaskModel.status.notin_(
+            [TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value]
+        )).first()
+    if active:
+        raise HTTPException(409, "Finish or cancel active tasks and pending approvals before changing projects.")
 
 
 @workspace_v1.post("/disconnect")
@@ -1061,6 +1111,7 @@ def disconnect_workspace_v1(
     from pathlib import Path
     from backend.app.config.settings import PROJECT_ROOT
 
+    _require_idle_workspace()
     agentos_root = Path(PROJECT_ROOT).resolve()
     default_workspace = (agentos_root / "workspace").resolve()
     default_workspace.mkdir(parents=True, exist_ok=True)

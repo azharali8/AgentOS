@@ -1,5 +1,6 @@
 /** Display labels only; requests always retain the exact Ollama tag. */
 export function modelLabel(tag:string):string {
+ if(tag==='AGENTOS_AUTO')return 'AgentOS Auto';
  const known:Record<string,string>={
   'qwen3.5:397b-cloud':'Qwen 3.5', 'nemotron-3-super:cloud':'Nemotron 3 Super',
   'deepseek-v4-flash:cloud':'DeepSeek V4 Flash', 'glm-5.2:cloud':'GLM 5.2',

@@ -10,7 +10,8 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     LLM_PROVIDER: str = "ollama"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "qwen2.5-coder:3b"
+    OLLAMA_MODEL: str = "AGENTOS_AUTO"
+    MODEL_VERIFICATION_FILE: str = str(PROJECT_ROOT / "data/model-verification.json")
     LLM_TIMEOUT_SECONDS: int = 600
     LLM_STRUCTURED_ATTEMPTS: int = 2
     OLLAMA_NUM_CTX: int = 8192

@@ -10,6 +10,14 @@ from backend.app.models.coding import InvestigationResult
 ORIGINAL = "import pytest\nfrom main import app\n@pytest.fixture\ndef client():\n    return app.test_client()\ndef test_endpoint(client):\n    assert client.get('/').status_code == 200\n"
 
 
+def test_requested_tests_cannot_be_omitted_from_empty_python_project():
+    proposal = GeneratedFiles(files=[{"path": "main.py", "content": "VALUE = 2"}])
+    with pytest.raises(ValueError, match="Include a test_"):
+        validate_python_proposal(proposal, {"main.py": "VALUE = 1"}, require_tests=True)
+    proposal.files.append(type(proposal.files[0])(path="test_main.py", content="from main import VALUE\ndef test_value():\n    assert VALUE == 2\n"))
+    validate_python_proposal(proposal, {"main.py": "VALUE = 1"}, require_tests=True)
+
+
 @pytest.mark.parametrize("content,reason", [
     ("def test_broken(:", "valid complete Python"),
     (ORIGINAL + "\n", "whitespace"),

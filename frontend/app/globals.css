@@ -153,6 +153,29 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
 .model-menu [role="listbox"] { max-height: 220px; overflow-y: auto; }
 
+/* Keep the existing picker visible inside narrow conversation panels. */
+.workspace-composer .model-picker { position: static; }
+.workspace-composer .model-menu {
+  top: auto;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: min(22rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: 40vh;
+}
+.workspace-composer .model-menu [role="listbox"] {
+  max-height: min(220px, calc(40vh - 48px));
+}
+@media (max-width: 640px) {
+  .workspace-composer .model-menu {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    width: auto;
+  }
+}
+
 .model-menu button[role="option"] {
   display: flex;
   align-items: center;

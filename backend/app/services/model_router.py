@@ -94,8 +94,9 @@ class ModelRouter:
     def _instantiate_provider(cls, provider_name: str) -> Optional[BaseLLMProvider]:
         try:
             if provider_name == "ollama":
+                from backend.app.services.cloud_model_pool import AUTO, AutoCloudProvider
                 from backend.app.llm.ollama import OllamaProvider
-                return OllamaProvider()
+                return AutoCloudProvider() if settings.OLLAMA_MODEL == AUTO else OllamaProvider()
             elif provider_name == "openai":
                 from backend.app.llm.openai_compatible import OpenAICompatibleProvider
                 return OpenAICompatibleProvider()
@@ -131,12 +132,15 @@ class ModelRouter:
                 res.raise_for_status()
                 names = {m.get("name") for m in res.json().get("models", [])}
                 installed = model in names or (":" not in model and model + ":latest" in names)
+                if model == "AGENTOS_AUTO":
+                    from backend.app.services.cloud_model_pool import pool
+                    installed = any(name in names for name in pool.candidates())
                 status = ModelStatus.READY if installed else ModelStatus.UNAVAILABLE
                 return ModelHealth(
                     provider=provider,
                     model=model,
                     status=status,
-                    error=None if installed else f"Model '{model}' is not installed. Set OLLAMA_MODEL to a name from ollama list.",
+                    error=None if installed else ("CLOUD_POOL_EXHAUSTED: no verified cloud model is currently available" if model == "AGENTOS_AUTO" else f"Model '{model}' is not installed. Set OLLAMA_MODEL to a name from ollama list."),
                     latency_ms=latency,
                     task_capabilities=["CODING", "REASONING", "DEBUGGING", "CLASSIFICATION"],
                 )

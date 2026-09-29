@@ -22,6 +22,11 @@ def setup(monkeypatch):
 
 @pytest.fixture
 def catalog(monkeypatch):
+    monkeypatch.setattr('backend.app.services.cloud_model_pool.verification', lambda: [
+        {'model':'coder:3b','cloud':False,'compatible':True},
+        {'model':'embed:latest','cloud':False,'compatible':True},
+        {'model':'llama3.2:latest','cloud':False,'compatible':True},
+        {'model':'llama3.2:3b','cloud':False,'compatible':True}])
     def get(url,**kwargs):
         return httpx.Response(200,request=httpx.Request('GET',url),json={'models':[{'name':'coder:3b','size':2000000000},{'name':'embed:latest','size':200000000},{'name':'huge:cloud','remote_host':'https://ollama.com'}]})
     def post(url,json,**kwargs):
@@ -35,16 +40,14 @@ def test_installed_models_only_and_selection_persists(catalog):
     response=client.get('/api/v1/system/local-models',headers=headers)
     assert response.status_code==200
     entries=response.json()['models']
-    assert [m['name'] for m in entries]==['coder:3b','embed:latest','huge:cloud']
+    assert [m['name'] for m in entries]==['coder:3b','embed:latest']
     assert entries[0]['selectable'] and not entries[1]['selectable']
     assert client.put('/api/v1/system/local-models',headers=headers,json={'model':'coder:3b'}).status_code==200
-    from backend.app.llm.factory import get_llm_provider
-    from backend.app.services.model_router import ModelRouter
-    assert get_llm_provider().model=='coder:3b'
-    assert ModelRouter.get_provider().model=='coder:3b'
-    settings.OLLAMA_MODEL='old:3b'
+    assert client.get('/api/v1/system/local-models',headers=headers).json()['active_model']=='coder:3b'
+    assert settings.OLLAMA_MODEL=='old:3b'
     models.restore_model_preference()
-    assert settings.OLLAMA_MODEL=='coder:3b'
+    assert settings.OLLAMA_MODEL=='old:3b'
+
 
 @pytest.mark.parametrize('name',['missing:3b','embed:latest'])
 def test_unavailable_model_cannot_be_selected(catalog,name):
@@ -93,10 +96,11 @@ def test_one_failed_metadata_probe_does_not_hide_other_models(monkeypatch,catalo
     assert result['models'][1]['status']=='Unavailable'
 
 
-def test_cloud_selection_uses_existing_provider(catalog):
-    assert client.put('/api/v1/system/local-models',headers=headers,json={'model':'huge:cloud'}).status_code == 200
-    assert settings.OLLAMA_MODEL == 'huge:cloud'
-    assert models.local_models()['models'][-1]['cloud'] is True
+def test_cloud_selection_is_backend_only(catalog):
+    assert client.put('/api/v1/system/local-models',headers=headers,json={'model':'huge:cloud'}).status_code == 400
+    assert all(not m['cloud'] for m in models.local_models()['models'])
+    assert client.put('/api/v1/system/local-models',headers=headers,json={'model':'AGENTOS_AUTO'}).status_code == 200
+    assert client.get('/api/v1/system/local-models',headers=headers).json()['active_model']=='AGENTOS_AUTO'
 
 
 def test_model_aliases_are_deduplicated(monkeypatch,catalog):

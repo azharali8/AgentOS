@@ -5,6 +5,18 @@ const {EngineeringStream}=load('../components/EngineeringStream.tsx',{'../lib/en
 const task={task_id:'t',instruction:'Create endpoint',status:'EXECUTING',created_at:'2026-09-21T10:00:00Z'};
 const event=(type,payload={},second=1,id=type)=>({task_id:'t',event_id:id,event_type:type,payload,timestamp:`2026-09-21T10:00:${String(second).padStart(2,'0')}Z`});
 const render=(events=[],extra={})=>renderToStaticMarkup(React.createElement(EngineeringStream,{task,events,artifacts:[],approval:null,client:{},isStreaming:true,onResolved(){},onViewFile(){},...extra}));
+
+test('change explanation is read-only and reports only applied evidence for the selected task',()=>{
+ assert.equal(mapper.isChangeSummaryRequest('Explain what you changed.'),true);
+ assert.equal(mapper.isChangeSummaryRequest('Fix the issues.'),false);
+ const report=mapper.recordedChangeSummary({...task,status:'FAILED',error:'Retest failed'},[
+  event('PATCH_APPLIED',{applied:true,files:['main.py']}),
+  event('PATCH_APPLIED',{applied:false,files:['unapplied.py']}),
+  {...event('PATCH_APPLIED',{applied:true,files:['other.py']}),task_id:'another-task'},
+ ]);
+ assert.match(report,/Recorded outcome: FAILED/);assert.match(report,/main.py/);
+ assert.match(report,/Retest failed/);assert.doesNotMatch(report,/unapplied.py|other.py|COMPLETED/);
+});
 test('real event mapping is ordered, deduplicated and excludes invented stages and private reasoning',()=>{
  const events=[event('FILE_READ',{path:'main.py'},3),event('PLAN_CREATED',{},2),event('TASK_CREATED',{},1),event('TASK_CREATED',{},1,'duplicate'),event('AGENT_PROTOCOL_MESSAGE',{reasoning:'PRIVATE'},4)];
  const rows=engineeringEntries(task,[...events,events[0]],[]);assert.deepEqual(Array.from(rows,r=>r.title),['Request received','Planning work','Read main.py']);assert.ok(!JSON.stringify(rows).includes('PRIVATE'));
@@ -55,3 +67,8 @@ test('approval submits the current approval once and continues in place with rea
 });
 
 test('failed coding does not claim changes were proposed',()=>{const rows=mapper.engineeringEntries({...task,status:'FAILED'},[event('SUBTASK_FAILED',{agent:'coding',subtask_id:'s',error:'Invalid target'})],[]);assert.equal(rows.find(r=>r.id==='subtask:s').title,'Implementation stopped');});
+
+test('Auto routing audit does not expose provider model names in conversation',()=>{
+ const html=render([event('MODEL_SELECTED',{mode:'AUTO_CLOUD',model:'private-cloud-name'}),event('MODEL_FAILOVER',{to_model:'other-cloud'},2)]);
+ assert.match(html,/AgentOS Auto/);assert.doesNotMatch(html,/private-cloud-name|other-cloud/);
+});

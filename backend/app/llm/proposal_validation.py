@@ -6,8 +6,9 @@ from pathlib import Path
 from backend.app.llm.structured import GeneratedFiles
 
 
-def validate_python_proposal(proposal: GeneratedFiles, originals: dict[str, str]) -> None:
+def validate_python_proposal(proposal: GeneratedFiles, originals: dict[str, str], *, require_tests: bool = False) -> None:
     changed = False
+    has_tests = False
     for file in proposal.files:
         old = originals.get(file.path)
         if old is None or old.strip() != file.content.strip():
@@ -18,6 +19,8 @@ def validate_python_proposal(proposal: GeneratedFiles, originals: dict[str, str]
             new_tree = ast.parse(file.content, filename=file.path)
         except SyntaxError as exc:
             raise ValueError(f"{file.path}:{exc.lineno}: {exc.msg}; return syntactically valid complete Python") from exc
+        if Path(file.path).name.startswith("test_") or Path(file.path).name.endswith("_test.py"):
+            has_tests |= any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test_") for n in ast.walk(new_tree))
         if old is None:
             continue
         try:
@@ -53,3 +56,5 @@ def validate_python_proposal(proposal: GeneratedFiles, originals: dict[str, str]
             raise ValueError(f"{file.path}: retain imports from the workspace application; do not replace it with a test-local implementation")
     if not changed:
         raise ValueError("Proposal changes only whitespace or nothing; return a substantive repair")
+    if require_tests and not has_tests:
+        raise ValueError("The instruction requests tests, but this Python project has no tests. Include a test_*.py file with executable test_* functions alongside the implementation.")

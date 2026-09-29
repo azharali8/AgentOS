@@ -5,6 +5,9 @@ def get_llm_provider() -> BaseLLMProvider:
     provider_name = settings.LLM_PROVIDER.lower()
     if provider_name == "ollama":
         from backend.app.llm.ollama import OllamaProvider
+        if settings.OLLAMA_MODEL == "AGENTOS_AUTO":
+            from backend.app.services.cloud_model_pool import AutoCloudProvider
+            return AutoCloudProvider()
         return OllamaProvider()
     elif provider_name == "openai":
         from backend.app.llm.openai_compatible import OpenAICompatibleProvider

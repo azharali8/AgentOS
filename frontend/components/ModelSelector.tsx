@@ -29,8 +29,8 @@ export function ModelSelector({preferences,disabled=false}:{preferences:Workspac
    items[next]?.focus();
   }
  }}>
-  <button ref={trigger} type="button" className="model-select" aria-label="Active local AI model" aria-haspopup="listbox" aria-expanded={open} disabled={disabled} onClick={()=>setOpen(!open)} onKeyDown={event=>{if(!open&&['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();setOpen(true);}}}>
-   <span>{models?modelLabel(models.active_model):busy?'Loading models…':'Choose model'}</span><span aria-hidden="true">⌄</span>
+  <button ref={trigger} type="button" className="model-select" aria-label="Active AI model" aria-haspopup="listbox" aria-expanded={open} disabled={disabled} onClick={()=>setOpen(!open)} onKeyDown={event=>{if(!open&&['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();setOpen(true);}}}>
+   <span>{models?(models.active_model==='AGENTOS_AUTO'?'AgentOS Auto':`Local · ${modelLabel(models.active_model)}`):busy?'Loading models…':'Choose model'}</span><span aria-hidden="true">⌄</span>
   </button>
   {open&&<div className="model-menu">
    {busy&&<p role="status">Checking models…</p>}
@@ -38,11 +38,13 @@ export function ModelSelector({preferences,disabled=false}:{preferences:Workspac
    {models?.status==='offline'&&<p role="alert">Ollama is offline.</p>}
    {preferences.error&&<p role="alert">{preferences.error}</p>}
    <div ref={list} role="listbox" aria-label="Available AI models">
-    {models?.models.filter(m => m.selectable).map(model=><button type="button" role="option" key={model.name} aria-selected={model.name===models.active_model} disabled={busy||!models.selection_enabled||models.status!=='online'} onClick={()=>{close();void select(model.name);}}>
-     <span>{modelLabel(model.name)}</span><small>{model.cloud?'Cloud':'Local'}</small>
+    <button type="button" role="option" aria-selected={models?.active_model==='AGENTOS_AUTO'} disabled={busy||disabled||!!models&&!models.selection_enabled} onClick={()=>{close();void select('AGENTOS_AUTO');}}><span>AgentOS Auto</span><small>Cloud</small></button>
+    <p className="text-xs theme-text-muted">Local</p>
+    {models?.models.filter(m => m.selectable && !m.cloud).map(model=><button type="button" role="option" key={model.name} aria-selected={model.name===models.active_model} disabled={busy||!models.selection_enabled||models.status!=='online'} onClick={()=>{close();void select(model.name);}}>
+     <span>{modelLabel(model.name)}</span><small>Local</small>
     </button>)}
    </div>
-   {!busy&&!models?.models.filter(m => m.selectable).length&&<p>No compatible chat models found.</p>}
+   {!busy&&!models?.models.filter(m => m.selectable && !m.cloud).length&&<p>No compatible chat models found.</p>}
    <button type="button" className="model-refresh" disabled={busy} onClick={()=>void refresh()}>Refresh models</button>
   </div>}
  </div>;

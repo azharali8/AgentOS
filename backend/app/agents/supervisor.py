@@ -453,6 +453,9 @@ class SupervisorAgent:
                     error=f"Unrecognized agent {agent_type.value}",
                 )
         except Exception as exc:
+            from backend.app.services.cloud_model_pool import CloudPoolExhausted
+            if isinstance(exc, CloudPoolExhausted):
+                raise
             logger.error("Error executing subtask %s with agent %s: %s", subtask.subtask_id, agent_type, exc)
             res = AgentResult(
                 subtask_id=subtask.subtask_id,

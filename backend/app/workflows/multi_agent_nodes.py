@@ -40,6 +40,11 @@ def _supervisor(state):
     from backend.app.llm.factory import get_llm_provider
     from backend.app.llm.ollama import OllamaProvider
     provider = get_llm_provider()
+    from backend.app.services.cloud_model_pool import AUTO, AutoCloudProvider
+    if settings.LLM_PROVIDER.lower() == 'ollama' and state.get('selected_model') == AUTO:
+        provider = AutoCloudProvider(task_id=state.get('task_id'))
+    elif settings.LLM_PROVIDER.lower() == 'ollama' and state.get('selected_model') and isinstance(provider, AutoCloudProvider):
+        provider = OllamaProvider(model=state['selected_model'])
     if isinstance(provider, OllamaProvider) and state.get("selected_model"):
         provider.model = state["selected_model"]
     return SupervisorAgent(llm_provider=provider)

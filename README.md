@@ -32,6 +32,7 @@ AgentOS brings those steps into a Supervisor-driven workflow. You can inspect th
 
 | Capability | What is implemented |
 | :--- | :--- |
+| **AgentOS Auto** | Verified cloud pool with bounded provider failover, per-user local override, and resumable capacity checkpoints. |
 | **Supervisor orchestration** | Task decomposition, dependency-aware agent dispatch, and stateful LangGraph execution. |
 | **Project creation** | Create a project directory, initialize starter metadata and optional Git, select it as the workspace, and submit an engineering instruction. Existing projects can also be connected. |
 | **Repository context** | File inspection, symbol and dependency analysis, search, and bounded context selection for agent tasks. |
@@ -94,7 +95,7 @@ Explore the implementation: [workflow graph](backend/app/workflows/multi_agent_w
 5. Review and approve proposed patches. Tests, diagnosis, retesting, and review follow through the same engineering workflow used by text requests.
 6. Follow task events in the UI; browser speech synthesis can announce feedback.
 
-Voice requires an AssemblyAI API key and a browser with microphone capture support. Audio leaves the machine for transcription. Physical-microphone success and audible browser TTS were not verified in the latest recorded demo; real transcription of a synthetic spoken WAV was verified.
+Live requires a server-side AssemblyAI API key and a browser with microphone/AudioWorklet support. Audio leaves the machine for transcription. The separate Mic button uses browser speech recognition and places final text in the editable composer; it does not send the command automatically. Unsupported browsers show an error. Physical microphone and audible TTS acceptance were not verified in the September 28 release checks; no real AssemblyAI session was opened.
 
 ## Demo
 
@@ -176,7 +177,7 @@ Edit `.env` for your machine:
 ```dotenv
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:latest
+OLLAMA_MODEL=AGENTOS_AUTO
 
 # Use an absolute path to the software project you want AgentOS to work on.
 WORKSPACE_ROOT=/absolute/path/to/your/project
@@ -189,14 +190,18 @@ VOICE_TTS_PROVIDER=browser
 
 On Windows, use a path such as `C:/Projects/MyApp`. Keep your target project separate from the AgentOS checkout. New projects can be created from the workspace UI instead of preparing their files manually.
 
-With Ollama running, install and check the configured local model:
+With Ollama running and your cloud account signed in, list your installed models and explicitly verify them:
 
 ```bash
-ollama pull llama3.2:latest
 ollama list
+python scripts/verify_ollama_models.py
 ```
 
-This is the local model used for the September 22 engineering acceptance run; `.env.example` still defaults to `qwen2.5-coder:3b`. Neither model guarantees engineering-task completion. For the earlier guided cloud run, see the [cloud demo configuration](docs/hackathon-demo-report.md#reproducing-the-approved-cloud-profile). Cloud generation sends supplied task/code context to the provider.
+The template uses `OLLAMA_MODEL=AGENTOS_AUTO`. Verification sends at most two small generation requests per distinct compatible installed model and executes generated probe tests in temporary folders. It writes an ignored, account-specific `data/model-verification.json`, tied to the Ollama endpoint and valid for seven days. Run it again when models/account access change or verification expires; no background generation polling occurs. A fresh checkout has no pre-certified cloud pool.
+
+The picker offers **AgentOS Auto** plus verified compatible **local** models, with duplicate aliases and embedding models excluded. Cloud names remain internal. Local compatibility means generation/schema support, not guaranteed engineering quality. Selecting local stores a per-user preference and pins subsequent tasks; selecting Auto restores cloud routing. Cloud requests transmit supplied task/code context to the provider.
+
+Provider quota/rate/network errors can advance through the verified pool, once per eligible model per request. Invalid output and failed tests use the existing bounded validation/recovery path instead. If the pool is exhausted, the task pauses at a saved node boundary. Select local and choose **Continue with selected model**, or **Retry Cloud**. Previously applied patches remain applied; new patches still require approval. Health cooldowns are process-local, not shared across workers. Permanent access/quota blocks require explicit re-verification and backend restart after access is restored. Exact remaining quota is unknown, never inferred from token usage.
 
 The template disables authentication for local development and contains placeholder secrets. Keep this quickstart on localhost. Review authentication and secret configuration before exposing the service.
 
@@ -287,20 +292,25 @@ These are application-level controls, not a claim that arbitrary generated code 
 
 ## Current status
 
-**Active development. REAL AUTONOMOUS ENGINEERING LOOP WORKING END-TO-END: NO.** The September 22 local-model acceptance did not complete the requested creation → approval → test → diagnosis → repair → approval → passing retest → review loop. An earlier guided cloud demo succeeded, but does not establish current autonomous reliability.
+**Real Auto creation workflow: PASS.** On September 28-29, 2026, the browser submitted “Create a simple FastAPI health endpoint and add a test for it.” Auto switched from an unavailable GPT OSS request to Gemma4, generated `main.py` and `test_main.py`, paused for browser approval, applied the approved patch, ran pytest (**1 passed**), obtained review approval, and reached **COMPLETED**. No manual file repair or success marking was used.
 
-| Latest engineering verification — September 22, 2026 | Result |
+The separate real Qwen Coder 3B read-only request completed with local routing, and Auto was restored. Controlled external-provider failures exercise real planning, graph checkpoints, patch approval/application, pytest, and review, including capacity loss after application without applying a patch twice.
+
+| Verification | Result |
 | :--- | :--- |
-| Focused backend regression | 76 passed, 3 warnings |
-| Full backend regression | 630 passed, 1 skipped, 4 warnings (298.52s) |
-| Real `llama3.2:latest` endpoint creation | FAILED: test proposal invalid after bounded retries |
-| Real diagnosis request | COMPLETED investigation; actual tests still failed with one setup error |
-| Real repair request | CANCELLED during generation to finalize; no passing retest or review |
-| Frontend / Voice / Live checks | Not rerun or modified in this phase; zero AssemblyAI calls |
+| Focused router tests | 19 passed |
+| Full backend regression | 654 passed, 1 skipped, 4 warnings (222.36 s) |
+| Frontend tests | 56 passed |
+| Lint / production build | Passed; four existing hook dependency warnings |
+| Real Auto creation | COMPLETED; 1 test passed; review approved |
+| Real local override | Qwen Coder 3B; COMPLETED; no cloud routing |
+| AssemblyAI calls | 0 in this phase |
 
-These are dated local results, not live CI status or benchmarks. See the [engineering acceptance report](docs/engineering-loop-acceptance-report.md), [earlier guided demo](docs/hackathon-demo-report.md), and [CI workflow](.github/workflows/ci.yml). The final compact prompt, retry feedback and context/symptom filtering changes have regression coverage but have not completed another real acceptance run.
+**Core text-based hackathon demo: verified for the small acceptance above. Deployment readiness: NO.** The earlier Llama creation/repair attempts remain failed evidence; a real cloud failure → diagnosis → repair → renewed approval → retest loop was not newly demonstrated in this router phase. Passing a small creation task does not establish general autonomous engineering reliability. Qwen/Llama probe coding failures and provider access limitations are documented, not hidden.
 
-The local 3B model can still produce invalid code proposals and incorrect repair advice. Observations are evidence; repair advice is not a verified cause or fix. Repeatable real-model recovery, the physical voice experience, and deployment configurations remain unverified. No generated files were manually repaired and no task was manually marked successful in this phase.
+Voice was not changed or live-tested in this router phase. Docker/Compose deployment blockers from the earlier release review remain unresolved. Application-level workspace and approval controls are not an operating-system sandbox or a distributed workspace lock.
+
+See the [cloud router report](docs/cloud-router-report.md) for model verification, pool ordering, quota handling, exact acceptance task IDs, tests, and limitations. The [earlier release report](docs/release-freeze-report.md) preserves prior failures. These are dated local results, not live CI status.
 
 ## Contributing
 

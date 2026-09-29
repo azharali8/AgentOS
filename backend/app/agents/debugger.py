@@ -107,6 +107,9 @@ class DebuggerAgent:
                 diagnosis.risks = ["The model repair proposal is unverified until applied and retested."]
             return diagnosis
         except Exception as exc:
+            from backend.app.services.cloud_model_pool import CloudPoolExhausted
+            if isinstance(exc, CloudPoolExhausted):
+                raise
             if self.strict:
                 raise RuntimeError(f"Model diagnosis unavailable: {exc}") from exc
             logger.warning("Debugger diagnosis LLM fallback: %s", exc)
