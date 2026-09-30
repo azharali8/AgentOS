@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AgentOS — Backend-only Dockerfile for Render
+# ─────────────────────────────────────────────────────────────────────────────
+# This file is used ONLY for Render (backend API) deployment.
+# The Next.js frontend is deployed separately to Vercel.
+#
+# Local development: use docker-compose.yml (unchanged).
+# Full stack local Docker: use Dockerfile (unchanged).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Stage 1: Python dependency builder ────────────────────────────────────────
+FROM python:3.11-slim AS python-builder
+
+WORKDIR /build
+
+# Install build tools for compiled packages (psycopg2-binary needs gcc)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libffi-dev libssl-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+
+# ── Stage 2: Production runtime (backend only) ────────────────────────────────
+FROM python:3.11-slim AS runtime
+
+LABEL maintainer="AgentOS Team"
+LABEL version="0.3.0"
+LABEL description="AgentOS — AI Engineering Operating System (backend)"
+
+# Non-root user for security — matches existing Dockerfile convention
+RUN groupadd -r agentos && useradd -r -g agentos -m -s /bin/false agentos
+
+WORKDIR /app
+
+# Copy installed Python packages from builder
+COPY --from=python-builder /install /usr/local
+
+# Copy backend source and Alembic config
+COPY --chown=agentos:agentos backend/ ./backend/
+COPY --chown=agentos:agentos alembic.ini ./
+
+# Create persistent volume mount points
+# NOTE: On Render free/starter plans these directories are ephemeral.
+# Use Render Disks or external storage for production persistence.
+RUN mkdir -p /app/data /app/workspace /app/artifacts /app/logs && \
+    chown -R agentos:agentos /app/data /app/workspace /app/artifacts /app/logs
+
+# Volumes — declare but Render mounts these as ephemeral unless a Disk is attached
+VOLUME ["/app/data", "/app/workspace", "/app/artifacts"]
+
+# Render injects PORT dynamically; default 8000 for local container testing
+EXPOSE 8000
+
+USER agentos
+
+# Health check — liveness probe (Render also has its own HTTP health check)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/health')" || exit 1
+
+# Entrypoint — run Alembic migrations then start the API server
+# PORT is injected by Render at runtime; falls back to 8000 for local testing
+ENTRYPOINT ["sh", "-c", "alembic upgrade head && uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2 --log-config /dev/null"]
