@@ -75,6 +75,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [submittedTask, setSubmittedTask] = useState<Task|null>(null);
   const [previousTurns,setPreviousTurns] = useState<{task:Task;events:any[];artifacts:any[]}[]>([]);
   const [pendingInstruction,setPendingInstruction] = useState('');
+  const [voiceTurns,setVoiceTurns] = useState<{transcript:string;tts_summary:string}[]>([]);
+  const [voiceTranscripts,setVoiceTranscripts] = useState<Record<string,string>>({});
   const [changeExplanation,setChangeExplanation] = useState<{question:string;answer:string}|null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(initialSelectedTaskId || null);
   
@@ -246,7 +248,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     try {
       await client.setWorkspaceRoot(projectPathInput.trim(), projectNameInput.trim());
       setChangeExplanation(null); setComposerError('');
-      setActiveTaskId(null); setSubmittedTask(null); setPreviousTurns([]);
+      setActiveTaskId(null); setSubmittedTask(null); setPreviousTurns([]);setVoiceTurns([]);setVoiceTranscripts({});
       setTaskArtifacts([]); setPendingApproval(null);
       setSelectedFilePath(null); setFileContent(null); setShowFileDrawer(false);
       setInputText(''); setAttachments([]);
@@ -270,7 +272,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     try {
       await client.disconnectWorkspace();
       setChangeExplanation(null); setComposerError('');
-      setActiveTaskId(null); setSubmittedTask(null); setPreviousTurns([]);
+      setActiveTaskId(null); setSubmittedTask(null); setPreviousTurns([]);setVoiceTurns([]);setVoiceTranscripts({});
       setTaskArtifacts([]); setPendingApproval(null); setShowFileDrawer(false);
       setInputText(''); setAttachments([]);
       setConnectedPath('');
@@ -418,7 +420,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   useEffect(() => () => { voiceInputRecognitionRef.current?.abort(); }, []);
 
-  const hasActiveConversation = !!activeTask || !!pendingInstruction;
+  const hasActiveConversation = !!activeTask || !!pendingInstruction || voiceTurns.length > 0;
 
   return (
     <div className="flex h-screen theme-bg-canvas theme-text-primary font-sans select-none overflow-hidden">
@@ -427,7 +429,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="space-y-4">
           {/* Top Brand */}
           <div
-            onClick={() => {setActiveTaskId(null);setPreviousTurns([]);setSubmittedTask(null);}}
+            onClick={() => {setActiveTaskId(null);setPreviousTurns([]);setVoiceTurns([]);setVoiceTranscripts({});setSubmittedTask(null);}}
             className="flex items-center space-x-2.5 px-2 cursor-pointer group"
           >
             <div className="text-indigo-600">
@@ -440,7 +442,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <nav className="space-y-1">
             {/* New Chat Button */}
             <button
-              onClick={() => {setActiveTaskId(null);setPreviousTurns([]);setSubmittedTask(null);}}
+              onClick={() => {setActiveTaskId(null);setPreviousTurns([]);setVoiceTurns([]);setVoiceTranscripts({});setSubmittedTask(null);}}
               className="w-full flex items-center space-x-2.5 px-3 py-2 bg-indigo-50/80 hover:bg-indigo-100/70 text-indigo-600 text-xs font-semibold rounded-xl transition-colors"
             >
               <MessageSquare className="w-4 h-4" />
@@ -661,11 +663,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             ) : (
               /* LIVE CONVERSATION STREAM */
               <div className="space-y-6 pb-32">
-                {previousTurns.map(turn=><div key={turn.task.task_id} className="space-y-4"><div className="flex justify-end"><p className="theme-bg-secondary rounded-2xl px-4 py-3 text-sm max-w-xl">{turn.task.instruction}</p></div><EngineeringStream task={tasks.find(t=>t.task_id===turn.task.task_id)||turn.task} events={turn.events} artifacts={turn.artifacts} approval={null} isStreaming={false} client={client} userRole={currentUser?.role} onResolved={onRefresh} onViewFile={path=>{void openFileDrawer();void handleSelectFile({path,is_dir:false,name:path} as WorkspaceItem);}}/></div>)}
+                {voiceTurns.map((turn,index)=><section key={index} className="space-y-3" aria-label="Live voice conversation"><div className="flex justify-end"><p className="theme-bg-secondary rounded-2xl px-4 py-3 text-sm max-w-xl">{turn.transcript}</p></div><p className="text-sm theme-text-primary">{turn.tts_summary}</p></section>)}
+                {previousTurns.map(turn=><div key={turn.task.task_id} className="space-y-4"><div className="flex justify-end"><p className="theme-bg-secondary rounded-2xl px-4 py-3 text-sm max-w-xl">{voiceTranscripts[turn.task.task_id] || turn.task.instruction}</p></div><EngineeringStream task={tasks.find(t=>t.task_id===turn.task.task_id)||turn.task} events={turn.events} artifacts={turn.artifacts} approval={null} isStreaming={false} client={client} userRole={currentUser?.role} onResolved={onRefresh} onViewFile={path=>{void openFileDrawer();void handleSelectFile({path,is_dir:false,name:path} as WorkspaceItem);}}/></div>)}
                 {/* User Message Bubble */}
                 <div className="flex items-start space-x-3 justify-end">
                   <div className="max-w-xl theme-bg-secondary theme-text-primary rounded-2xl px-4 py-3 text-sm font-medium leading-relaxed shadow-2xs border theme-border-subtle">
-                    {activeTask?.instruction || pendingInstruction}
+                    {activeTask ? voiceTranscripts[activeTask.task_id] || activeTask.instruction : pendingInstruction}
                   </div>
                 </div>
 
@@ -913,9 +916,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </button>
 
                 <VoiceControl client={client} liveOnly readAloud={preferences.readAloud}
-                  disabled={isVoiceInputRecording || isSubmitting}
+                  disabled={isVoiceInputRecording || isSubmitting || preferences.busy}
                   onActiveChange={setIsLiveAgentActive}
-                  onTaskCreated={(taskId) => { setActiveTaskId(taskId); onRefresh(); }}
+                  onTurnResult={result=>{if(result.task_id)setVoiceTranscripts(prev=>({...prev,[result.task_id!]:result.transcript}));else setVoiceTurns(prev=>[...prev,result]);}}
+                  onTaskCreated={(taskId) => { if(activeTask && activeTask.task_id!==taskId)setPreviousTurns(prev=>[...prev,{task:activeTask,events:streamEvents,artifacts:taskArtifacts}]);setActiveTaskId(taskId); onRefresh(); }}
                 />
 
                 {/* Circular Send Button */}
@@ -974,7 +978,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <button
                 onClick={() => {
                   setActiveTaskId(null);
-                  setPreviousTurns([]);
+                  setPreviousTurns([]);setVoiceTurns([]);setVoiceTranscripts({});
                   setSubmittedTask(null);
                   setShowHistoryDrawer(false);
                 }}

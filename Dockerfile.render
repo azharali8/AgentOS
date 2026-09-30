@@ -29,7 +29,7 @@ LABEL maintainer="AgentOS Team"
 LABEL version="0.3.0"
 LABEL description="AgentOS — AI Engineering Operating System (backend)"
 
-# Non-root user for security — matches existing Dockerfile convention
+# Non-root user for security - matches existing Dockerfile convention
 RUN groupadd -r agentos && useradd -r -g agentos -m -s /bin/false agentos
 
 WORKDIR /app

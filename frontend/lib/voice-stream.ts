@@ -30,3 +30,15 @@ export function supervisorStage(status: string, events: {event_type: string; pay
   const stages: Record<string, string> = {CODING: 'Implementing', TESTING: 'Running tests', DEBUGGER: 'Investigating failure', REVIEWER: 'Reviewing', RESEARCH: 'Analyzing repository'};
   return stages[String(latest?.payload?.agent).toUpperCase()] || 'Planning';
 }
+
+/** Speak only concise lifecycle and captured test evidence, never logs or diffs. */
+export function spokenTaskResult(status: string, events: {event_type:string;payload?:Record<string,any>}[]): string {
+  if(status==='WAITING_APPROVAL')return 'The changes are ready for your approval. Review the diff and click Approve and Apply.';
+  if(status==='PAUSED')return 'The task is paused. Check the conversation for the next action.';
+  if(status==='FAILED')return 'The task failed. The failure details are in the conversation.';
+  if(status==='CANCELLED')return 'The task was cancelled.';
+  const report=[...events].reverse().find(e=>e.event_type==='TEST_COMPLETED')?.payload?.report;
+  if(status==='COMPLETED' && report?.passed===true && Number.isInteger(report.passed_count))
+    return `The task completed successfully. ${report.passed_count} ${report.passed_count===1?'test passed':'tests passed'}.`;
+  return status==='COMPLETED'?'The task completed. The result is in the conversation.':'Working on it.';
+}

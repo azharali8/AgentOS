@@ -229,9 +229,20 @@ class VoiceService:
         # another request's pending intent. Engineering work runs outside this lock.
         with cls._conversation_lock:
             conv = cls.get_conversation_state(session_id, user_id)
-            agent = VoiceAgent(conversation=conv)
+            agent = VoiceAgent(conversation=conv, live_mode=provider == "assemblyai-streaming")
             result = agent.process(transcript=transcript, user_id=user_id, user_role=user_role)
         task_id = result.task_id
+        if task_id and result.status in ("created", "planning"):
+            # Match typed task selection before starting the Supervisor; never mutate global settings.
+            from backend.app.services.local_model_settings import model_preference
+            from backend.app.db.database import get_db_session
+            from backend.app.db.models import TaskModel
+            selection = model_preference(user_id)
+            with get_db_session() as db:
+                record = db.get(TaskModel, task_id)
+                if record:
+                    record.task_metadata = {**(record.task_metadata or {}),
+                        "model_selection": selection, "model_owner": user_id}
         if task_id and auto_start and result.status in ("created", "planning"):
             task = TaskService.get_task(task_id)
             if task is None:

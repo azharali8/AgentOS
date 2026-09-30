@@ -77,3 +77,11 @@ test('duplicate final revision cannot end newer speech or revive an old response
   assert.equal(p.userSpeaking, true);
   assert.equal(p.canSpeak(0), false);
 });
+
+test('spoken task summaries use captured counts without reading logs or invented success',()=>{
+ const summarize=exportsObject.spokenTaskResult;
+ assert.equal(summarize('COMPLETED',[{event_type:'TEST_COMPLETED',payload:{report:{passed:true,passed_count:1,raw_stdout:'private log'}}}]),'The task completed successfully. 1 test passed.');
+ assert.doesNotMatch(summarize('FAILED',[]),/successfully|private log/);
+ assert.match(summarize('WAITING_APPROVAL',[]),/approval/);
+ assert.doesNotMatch(summarize('COMPLETED',[]),/test passed/);
+});

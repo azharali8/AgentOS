@@ -3,12 +3,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, Square, X, Volume2, VolumeX, Loader2, AudioLines } from 'lucide-react';
 import { AgentOSClient } from '../../lib/api';
-import { VoicePlayback, reconnectDelay, supervisorStage } from '../../lib/voice-stream';
+import { VoicePlayback, reconnectDelay, supervisorStage, spokenTaskResult } from '../../lib/voice-stream';
 import { BrowserSpeech } from '../../lib/browser-speech';
 
 interface VoiceControlProps {
   client: AgentOSClient;
   onTaskCreated?: (taskId: string) => void;
+  onTurnResult?: (result: {transcript:string;tts_summary:string;task_id?:string}) => void;
   className?: string;
   compact?: boolean;
   liveOnly?: boolean;
@@ -17,7 +18,9 @@ interface VoiceControlProps {
   disabled?:boolean;
 }
 
-export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated, className = '',liveOnly=false,readAloud=true,onActiveChange,disabled=false}) => {
+export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated, onTurnResult, className = '',liveOnly=false,readAloud=true,onActiveChange,disabled=false}) => {
+  const callbacks=useRef({onTaskCreated,onTurnResult});
+  callbacks.current={onTaskCreated,onTurnResult};
   const mode=useRef<'once'|'live'>('live');
   const results=useRef(new Set<number>());
   const [state, setState] = useState('idle');
@@ -54,8 +57,8 @@ export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated
   const release = useCallback(() => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-    worklet.current?.disconnect(); worklet.current = null;
-    stream.current?.getTracks().forEach(t => t.stop()); stream.current = null;
+    if(worklet.current){worklet.current.port.onmessage=null;worklet.current.port.close?.();worklet.current.disconnect();} worklet.current = null;
+    stream.current?.getTracks().forEach(t => {t.onended=null;t.stop();}); stream.current = null;
     if (context.current) void context.current.close().catch(() => {});
     context.current = null;
   }, []);
@@ -68,7 +71,7 @@ export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated
       // Give the server time to receive AssemblyAI's Termination acknowledgement.
       setTimeout(() => ws.close(), 3500);
     } else ws?.close();
-    release(); stopSpeech(); setState('idle');
+    release(); stopSpeech(); setTaskId(null); setState('idle');
   }, [release, stopSpeech]);
 
   useEffect(() => () => { stop(); }, [stop]);
@@ -95,9 +98,9 @@ export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated
         if (disposed) return;
         setProgressError('');
         setStage(supervisorStage(task.status, events));
-        if (['COMPLETED', 'FAILED', 'CANCELLED', 'WAITING_APPROVAL'].includes(task.status) && announced !== task.status && !playback.current?.userSpeaking) {
+        if (['COMPLETED', 'FAILED', 'CANCELLED', 'WAITING_APPROVAL', 'PAUSED'].includes(task.status) && announced !== task.status && !playback.current?.userSpeaking) {
           announced = task.status;
-          const text = task.status === 'WAITING_APPROVAL' ? 'Awaiting approval. Review the proposed changes in Approvals.' : task.result_summary || task.error || `Task ${task.status.toLowerCase()}.`;
+          const text = spokenTaskResult(task.status, events);
           setFeedback(text); speak(text);
         }
       } catch {
@@ -111,9 +114,8 @@ export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated
   useEffect(()=>{if(!readAloud)stopSpeech();},[readAloud,stopSpeech]);
 
   const start = async (selectedMode:'once'|'live') => {
-    if(disabled)return;
+    if(disabled || active.current)return;
     mode.current=selectedMode;results.current.clear();setTaskId(null);setStage('');setProgressError('');
-    if (active.current) return;
     active.current = true;
     const gen = ++generation.current;
     setOpen(true); setState('connecting'); setError(''); setTranscript(''); setFeedback('');
@@ -154,12 +156,13 @@ export const VoiceControl: React.FC<VoiceControlProps> = ({client, onTaskCreated
                 if (message.end_of_turn) {playback.current?.final(message.turn_order);if(mode.current==='once'&&message.transcript.trim()){retryable=false;release();}}
                 break;
               case 'Processing':
-                playback.current?.processing(message.turn_order); setState('processing'); break;
+                playback.current?.processing(message.turn_order); setState('processing'); setFeedback('Working on it.'); break;
               case 'Result':
                 if(results.current.has(message.turn_order))break;results.current.add(message.turn_order);
                 setState('listening'); setFeedback(message.tts_summary);
+                callbacks.current.onTurnResult?.({transcript:message.transcript || '',tts_summary:message.tts_summary,task_id:message.task_id});
                 if (['failed', 'error', 'denied'].includes(message.status)) setError(message.tts_summary);
-                if (message.task_id) { setTaskId(message.task_id); onTaskCreated?.(message.task_id); }
+                if (message.task_id) { setTaskId(message.task_id); callbacks.current.onTaskCreated?.(message.task_id); }
                 if (playback.current?.canSpeak(message.turn_order)) speak(message.tts_summary);
                 if(mode.current==='once'){stop();setState(['failed','error','denied'].includes(message.status)?'error':'completed');}
                 break;

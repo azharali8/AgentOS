@@ -142,3 +142,17 @@ test('model selection reports failure and preserves the previous active model',a
  reject(new Error('offline'));assert.equal(await pending,false);
  assert.equal(render().models.active_model,'coder:3b');assert.equal(render().busy,false);assert.match(render().error,/selection failed/);
 });
+
+test('Live multi-turn permits the same phrase later and returns from playback',async()=>{
+ const turns=[];const v=await voiceHarness({onTurnResult:r=>turns.push(r)});
+ find(v.render(),n=>n.props['aria-label']==='Start Live Voice').props.onClick();await v.settle();v.render();v.h.flush();const ws=v.sockets[0];
+ const event=m=>ws.onmessage({data:JSON.stringify(m)});event({type:'Begin'});
+ for(const order of [0,1]){
+  event({type:'Turn',transcript:'status',end_of_turn:false,turn_order:order});assert.equal(turns.length,order);
+  event({type:'Turn',transcript:'status',end_of_turn:true,turn_order:order});event({type:'Processing',turn_order:order});
+  const result={type:'Result',turn_order:order,transcript:'status',tts_summary:'Ready',status:'ok'};
+  event(result);event(result);assert.equal(turns.length,order+1);v.spoken[order].onend();
+ }
+ assert.equal(v.spoken.length,2);assert.equal(v.sockets.length,1);
+ find(v.render(),n=>n.props['aria-label']==='End Live Voice').props.onClick();assert.equal(v.tracks.length,1);
+});

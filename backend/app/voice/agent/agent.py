@@ -42,10 +42,12 @@ class VoiceAgent:
         self,
         conversation: Optional[ConversationState] = None,
         gateway: Optional[AgentOSCommandGateway] = None,
+        live_mode: bool = False,
     ) -> None:
         self.conversation = conversation or ConversationState()
         self.gateway = gateway or AgentOSCommandGateway()
         self.confirmation_gate = ConfirmationGate()
+        self.live_mode = live_mode
 
     def process(
         self,
@@ -225,6 +227,19 @@ class VoiceAgent:
 
     def _route_and_respond(self, intent: VoiceIntent, user_id: Optional[str]) -> VoiceAgentResult:
         """Route intent through AgentOSCommandGateway and build a natural VoiceAgentResult."""
+        if self.live_mode:
+            if intent.intent_type in (IntentType.APPROVE_ACTION, IntentType.REJECT_ACTION):
+                return VoiceAgentResult(intent_type=intent.intent_type,
+                    status="needs_clarification" if getattr(self, "user_role", None) in ("admin", "developer") else "denied",
+                    tts_summary="Approval requires developer permissions. Please review the proposed changes and use the approval buttons in the conversation.")
+            from backend.app.config.settings import PROJECT_ROOT, settings
+            root = Path(settings.WORKSPACE_ROOT).resolve()
+            requires_project = intent.intent_type in (IntentType.CREATE_TASK, IntentType.EXECUTE_TASK,
+                IntentType.RUN_TESTS, IntentType.INVESTIGATE_FAILURE, IntentType.REVIEW_CHANGES,
+                IntentType.UNKNOWN, IntentType.GET_WORKSPACE_STATUS)
+            if requires_project and (root == (PROJECT_ROOT / "workspace").resolve() or not root.is_dir()):
+                return VoiceAgentResult(intent_type=intent.intent_type, status="needs_clarification" if root.is_dir() else "failed",
+                    tts_summary="Connect a project before using this command. No task was started.")
         if intent.intent_type == IntentType.CREATE_PROJECT:
             if not intent.project_name:
                 self.conversation.set_pending_question(
