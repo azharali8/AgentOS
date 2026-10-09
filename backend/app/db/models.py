@@ -1,7 +1,33 @@
 import datetime
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from backend.app.db.database import Base
+
+class ProjectModel(Base):
+    __tablename__ = "projects"
+    project_id = Column(String(36), primary_key=True)
+    owner_id = Column(String(100), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    workspace_path = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+    __table_args__ = (UniqueConstraint("owner_id", "workspace_path", name="uq_project_owner_workspace"),)
+
+
+class ConversationModel(Base):
+    __tablename__ = "conversations"
+    conversation_id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), ForeignKey("projects.project_id", ondelete="RESTRICT"), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+
+
+class ConversationTaskModel(Base):
+    """Additive link: existing task IDs, graph threads and evidence stay intact."""
+    __tablename__ = "conversation_tasks"
+    task_id = Column(String(36), ForeignKey("tasks.task_id", ondelete="CASCADE"), primary_key=True)
+    conversation_id = Column(String(36), ForeignKey("conversations.conversation_id", ondelete="RESTRICT"), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+
 
 class TaskModel(Base):
     __tablename__ = "tasks"

@@ -38,13 +38,48 @@ import {
   Volume2,
 } from 'lucide-react';
 import { Task, AgentDefinition, UserProfile, ApprovalRequestItem, WorkspaceTreeResponse, WorkspaceItem } from '../types';
-import { AgentOSClient } from '../lib/api';
+import { AgentOSClient, ProjectRecord, ConversationRecord } from '../lib/api';
+import {ProjectsSidebar} from './ProjectsSidebar';
 import { WorkspaceSettings } from '../hooks/useWorkspaceSettings';
 import { useTaskEventStream } from '../hooks/useTaskEventStream';
 import { EngineeringStream } from './EngineeringStream';
+
+function RecordedEngineeringTurn(props: React.ComponentProps<typeof EngineeringStream>) {
+  const [expanded, setExpanded] = useState(false);
+  const [events, setEvents] = useState(props.events);
+  const [artifacts, setArtifacts] = useState(props.artifacts);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  useEffect(() => {
+    if (!expanded) return;
+    let disposed = false;
+    setBusy(true); setError('');
+    Promise.all([props.client.getTaskEvents(props.task.task_id, offset, 100), props.client.getTaskArtifacts(props.task.task_id)])
+      .then(([page, records]) => {
+        if (disposed) return;
+        setEvents(previous => Array.from(new Map([...previous, ...page].map(event => [event.event_id, event])).values())
+          .sort((a,b) => Date.parse(a.timestamp)-Date.parse(b.timestamp) || a.event_id.localeCompare(b.event_id)));
+        setArtifacts(records); setHasMore(page.length === 100);
+      }).catch(() => { if (!disposed) setError('Recorded activity could not be loaded. Close and reopen to retry.'); })
+      .finally(() => { if (!disposed) setBusy(false); });
+    return () => { disposed = true; };
+  }, [expanded, offset, props.client, props.task.task_id]);
+  return <section>
+    <button className="engineering-link text-xs" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
+      {expanded ? 'Hide recorded activity' : `View recorded activity · ${props.task.status}`}
+    </button>
+    {expanded && <div className="mt-4">
+      {error && <p role="alert">{error}</p>}
+      <EngineeringStream {...props} events={events} artifacts={artifacts}/>
+      {busy && <p role="status" className="text-xs theme-text-muted">Loading recorded activity…</p>}
+      {!busy && !error && hasMore && <button className="engineering-link" onClick={() => setOffset(value => value + 100)}>Load more activity</button>}
+    </div>}
+  </section>;
+}
 import { shouldFollowStream, isChangeSummaryRequest, recordedChangeSummary } from '../lib/engineering-stream';
 import { ModelSelector } from './ModelSelector';
-import { VoiceControl } from './voice/VoiceControl';
 import { Attachment, ACCEPTED_CONTEXT, readAttachment, shouldSubmit } from '../lib/composer';
 
 interface DashboardViewProps {
@@ -67,11 +102,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   client,
   preferences,
   onRefresh,
-  tasks,
   currentUser,
   selectedTaskId: initialSelectedTaskId,
   onSignOut,
 }) => {
+  const [tasks,setTasks] = useState<Task[]>([]);
+  const [projects,setProjects] = useState<ProjectRecord[]>([]);
+  const [conversations,setConversations] = useState<ConversationRecord[]>([]);
+  const [projectId,setProjectId] = useState<string|null>(null);
+  const [conversationId,setConversationId] = useState<string|null>(null);
+  const [projectBusy,setProjectBusy] = useState(false);
+  const [projectError,setProjectError] = useState('');
+  const projectEpoch = useRef(0);
   const [submittedTask, setSubmittedTask] = useState<Task|null>(null);
   const [previousTurns,setPreviousTurns] = useState<{task:Task;events:any[];artifacts:any[]}[]>([]);
   const [pendingInstruction,setPendingInstruction] = useState('');
@@ -95,6 +137,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [projectPathInput, setProjectPathInput] = useState('');
   const [projectNameInput, setProjectNameInput] = useState('');
+  const [createProjectMode,setCreateProjectMode] = useState(false);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
 
@@ -147,6 +190,65 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const plusMenuRef = useRef<HTMLDivElement>(null);
 
+  const [moreProjects, setMoreProjects] = useState(false);
+  const [moreConversations, setMoreConversations] = useState(false);
+  const loadMoreHistory = async (kind: 'projects' | 'conversations') => {
+    const epoch = projectEpoch.current;
+    setProjectBusy(true);
+    try {
+      if (kind === 'projects') {
+        const page = await client.projects(projects.length);
+        if (epoch !== projectEpoch.current) return;
+        setProjects(previous => [...previous, ...page.projects.filter(item => !previous.some(p => p.project_id === item.project_id))]);
+        setMoreProjects(page.projects.length === 50);
+      } else if (projectId) {
+        const page = await client.conversations(projectId, conversations.length);
+        if (epoch !== projectEpoch.current) return;
+        setConversations(previous => [...previous, ...page.filter(item => !previous.some(c => c.conversation_id === item.conversation_id))]);
+        setMoreConversations(page.length === 50);
+      }
+    } catch { if (epoch === projectEpoch.current) setProjectError('Could not load more history. Please retry.'); }
+    finally { if (epoch === projectEpoch.current) setProjectBusy(false); }
+  };
+  const clearConversation = useCallback(() => {
+    setTasks([]);setActiveTaskId(null);setSubmittedTask(null);setPreviousTurns([]);
+    setVoiceTurns([]);setVoiceTranscripts({});setTaskArtifacts([]);setPendingApproval(null);
+    setInputText('');setAttachments([]);setChangeExplanation(null);setComposerError('');
+    setFileTreeLoading(false);setFileContentLoading(false);setFileTree(null);setSelectedFilePath(null);setFileContent(null);setShowFileDrawer(false);
+  }, []);
+  const openConversation = useCallback(async (project:string, conversation:string, epoch:number) => {
+    const records = await client.conversationTasks(project,conversation);
+    if(projectEpoch.current!==epoch)return;
+    setConversationId(conversation);setTasks(records);
+    const latest=records[records.length-1];setActiveTaskId(latest?.task_id||null);
+    // Earlier prompts persist; their evidence is loaded only when the user opens a task.
+    setPreviousTurns(records.slice(0,-1).map(task=>({task,events:[],artifacts:[]})));
+  }, [client]);
+  const loadProjects = useCallback(async (activate?:string, requestedConversation?:string) => {
+    const epoch=++projectEpoch.current;setProjectBusy(true);setProjectError('');clearConversation();setConversationId(null);setProjectId(null);
+    try {
+      if(activate)await client.activateProject(activate);
+      const result=await client.projects();if(projectEpoch.current!==epoch)return;
+      setMoreProjects(result.projects.length===50);setProjects(result.projects);setProjectId(result.active_project_id);
+      if(result.active_project_id){
+        const selected=result.projects.find(p=>p.project_id===result.active_project_id);
+        setConnectedPath(selected?.workspace_path||'');
+        const history=await client.conversations(result.active_project_id);if(projectEpoch.current!==epoch)return;
+        setConversations(history);setMoreConversations(history.length===50);
+        const conversation=requestedConversation||history[0]?.conversation_id;
+        if(conversation)await openConversation(result.active_project_id,conversation,epoch);
+      }else{setConnectedPath('');setConversations([]);}
+    }catch(error:any){if(projectEpoch.current===epoch)setProjectError(error.message||'Project unavailable');}
+    finally{if(projectEpoch.current===epoch)setProjectBusy(false);}
+  }, [client, clearConversation, openConversation]);
+  useEffect(()=>{const epochRef=projectEpoch;void loadProjects();return()=>{epochRef.current++;};},[loadProjects]);
+  useEffect(()=>{
+    if(!projectId||!conversationId)return;
+    let disposed=false;
+    const refresh=()=>client.conversationTasks(projectId,conversationId).then(records=>{if(!disposed)setTasks(records);}).catch(()=>{if(!disposed)setProjectError('Conversation refresh failed. Recorded results are not confirmed.');});
+    const timer=setInterval(refresh,5000);return()=>{disposed=true;clearInterval(timer);};
+  },[client,projectId,conversationId]);
+
   // Load project info
   const loadProjectInfo = useCallback(async () => {
     try {
@@ -168,15 +270,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
   }, [client]);
 
-  useEffect(() => {
-    loadProjectInfo();
-  }, [loadProjectInfo]);
+
 
   // Handle active task
   const activeTask = tasks.find((t) => t.task_id === activeTaskId) || (submittedTask?.task_id===activeTaskId?submittedTask:null);
   const token = typeof window !== 'undefined' ? localStorage.getItem('agentos_token') : null;
   const { events: streamEvents, isConnected: isStreaming, error: streamError } = useTaskEventStream(activeTaskId, token);
 
+  const artifactRevision=streamEvents.filter(e=>['PATCH_CREATED','TEST_COMPLETED','DEBUG_DIAGNOSIS_CREATED','SUBTASK_COMPLETED','TASK_COMPLETED','TASK_FAILED'].includes(e.event_type)).map(e=>e.event_id).join('|');
   // Load artifacts
   useEffect(() => {
     if (!activeTaskId) {
@@ -186,7 +287,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     let disposed=false;
     client.getTaskArtifacts(activeTaskId).then(value=>{if(!disposed)setTaskArtifacts(value);}).catch(()=>{if(!disposed)setTaskArtifacts([]);});
     return()=>{disposed=true;};
-  }, [activeTaskId, client, streamEvents]);
+  }, [activeTaskId, client, artifactRevision]);
 
   // Check pending approval
   useEffect(() => {
@@ -194,16 +295,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       setPendingApproval(null);
       return;
     }
+    let disposed = false;
     if (activeTask.status === 'WAITING_APPROVAL' || streamEvents.some((e) => e.event_type === 'APPROVAL_REQUIRED')) {
       client.listApprovals(100).then((list) => {
         const matching = list.find(
           (a) => a.task_id === activeTask.task_id && a.status === 'PENDING'
         );
-        setPendingApproval(matching || null);
+        if(!disposed)setPendingApproval(matching || null);
       }).catch(() => {});
     } else {
       setPendingApproval(null);
     }
+    return()=>{disposed=true;};
   }, [activeTask, streamEvents, client]);
 
   // Auto-scroll
@@ -246,7 +349,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     setModalLoading(true);
     setModalError(null);
     try {
-      await client.setWorkspaceRoot(projectPathInput.trim(), projectNameInput.trim());
+      if(createProjectMode)await client.createProject(projectNameInput.trim(),projectPathInput.trim());
+      else await client.setWorkspaceRoot(projectPathInput.trim(), projectNameInput.trim());
       setChangeExplanation(null); setComposerError('');
       setActiveTaskId(null); setSubmittedTask(null); setPreviousTurns([]);setVoiceTurns([]);setVoiceTranscripts({});
       setTaskArtifacts([]); setPendingApproval(null);
@@ -256,7 +360,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       setProjectPathInput('');
       setProjectNameInput('');
       setFileTree(null);
-      await loadProjectInfo();
+      await loadProjects();
       onRefresh();
     } catch (err: any) {
       setModalError(err.message || 'Failed to connect project directory.');
@@ -281,7 +385,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       setFileTree(null);
       setSelectedFilePath(null);
       setFileContent(null);
-      await loadProjectInfo();
+      await loadProjects();
       onRefresh();
     } catch (err: any) {
       setComposerError(err.message || 'Could not disconnect. Finish or cancel active tasks first.');
@@ -292,31 +396,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Open file drawer
   const openFileDrawer = async () => {
+    const epoch = projectEpoch.current;
     setShowFileDrawer(true);
     if (fileTree) return;
     setFileTreeLoading(true);
     try {
       const tree = await client.getWorkspaceTree('');
-      setFileTree(tree);
+      if (projectEpoch.current === epoch) setFileTree(tree);
     } catch {
-      setFileTree(null);
+      if (projectEpoch.current === epoch) setFileTree(null);
     } finally {
-      setFileTreeLoading(false);
+      if (projectEpoch.current === epoch) setFileTreeLoading(false);
     }
   };
 
   const handleSelectFile = async (item: WorkspaceItem) => {
     if (item.is_dir) return;
+    const epoch = projectEpoch.current;
     setSelectedFilePath(item.path);
     setFileContentLoading(true);
     setFileContent(null);
     try {
       const res = await client.getWorkspaceFile(item.path);
-      setFileContent(res.content);
+      if (projectEpoch.current === epoch) setFileContent(res.content);
     } catch {
-      setFileContent('// Unable to read file content.');
+      if (projectEpoch.current === epoch) setFileContent('// Unable to read file content.');
     } finally {
-      setFileContentLoading(false);
+      if (projectEpoch.current === epoch) setFileContentLoading(false);
     }
   };
 
@@ -337,6 +443,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Submit task from composer
   const handleSubmitTask = async (textOverride?: string) => {
+    const epoch = projectEpoch.current;
     const textToSubmit = (textOverride || inputText).trim();
     if (!textToSubmit || isSubmitting || preferences.busy) return;
 
@@ -358,7 +465,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     setPendingInstruction(textToSubmit);
     setComposerError('');
     try {
-      const task = await client.createTask(textToSubmit, 1, { attachments });
+      if(!projectId)throw new Error('Connect or select a project before sending a command.');
+      const task = await client.createTask(textToSubmit, 1, { attachments, project_id:projectId, conversation_id:conversationId||undefined });
+      if (projectEpoch.current !== epoch) return;
+      setConversationId(task.metadata?.conversation_id||null);
+      setTasks(prev=>[...prev,task]);
+      client.conversations(projectId).then(records=>{if(projectEpoch.current===epoch)setConversations(records);}).catch(()=>{if(projectEpoch.current===epoch)setProjectError('Could not refresh conversations');});
       setInputText('');
       setAttachments([]);
       if(activeTask)setPreviousTurns(prev=>[...prev,{task:activeTask,events:streamEvents,artifacts:taskArtifacts}]);
@@ -429,7 +541,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="space-y-4">
           {/* Top Brand */}
           <div
-            onClick={() => {setActiveTaskId(null);setPreviousTurns([]);setVoiceTurns([]);setVoiceTranscripts({});setSubmittedTask(null);}}
+            onClick={() => {++projectEpoch.current;clearConversation();setConversationId(null);}}
             className="flex items-center space-x-2.5 px-2 cursor-pointer group"
           >
             <div className="text-indigo-600">
@@ -440,23 +552,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           {/* Primary Sidebar Nav */}
           <nav className="space-y-1">
-            {/* New Chat Button */}
-            <button
-              onClick={() => {setActiveTaskId(null);setPreviousTurns([]);setVoiceTurns([]);setVoiceTranscripts({});setSubmittedTask(null);}}
-              className="w-full flex items-center space-x-2.5 px-3 py-2 bg-indigo-50/80 hover:bg-indigo-100/70 text-indigo-600 text-xs font-semibold rounded-xl transition-colors"
-            >
-              <MessageSquare className="w-4 h-4" />
-              <span>New Chat</span>
-            </button>
-
-            {/* Chat History */}
-            <button
-              onClick={() => setShowHistoryDrawer(true)}
-              className="w-full flex items-center space-x-2.5 px-3 py-2 theme-text-muted hover:theme-text-primary hover:theme-bg-secondary text-xs font-medium rounded-xl transition-colors"
-            >
-              <History className="w-4 h-4 text-slate-400" />
-              <span>Chat History</span>
-            </button>
+            <ProjectsSidebar projects={projects} conversations={conversations} activeProject={projectId}
+              onMoreProjects={moreProjects?()=>void loadMoreHistory('projects'):undefined}
+              onMoreConversations={moreConversations?()=>void loadMoreHistory('conversations'):undefined}
+              activeConversation={conversationId} busy={projectBusy || isSubmitting} error={projectError}
+              onProject={id=>void loadProjects(id)} onConversation={id=>void loadProjects(undefined,id)}
+              onNewProject={()=>setShowProjectModal(true)} onRetry={()=>void loadProjects()}
+              onNewConversation={()=>{++projectEpoch.current;clearConversation();setConversationId(null);}}/>
 
             {/* Scheduled Tasks */}
             <button
@@ -664,7 +766,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               /* LIVE CONVERSATION STREAM */
               <div className="space-y-6 pb-32">
                 {voiceTurns.map((turn,index)=><section key={index} className="space-y-3" aria-label="Live voice conversation"><div className="flex justify-end"><p className="theme-bg-secondary rounded-2xl px-4 py-3 text-sm max-w-xl">{turn.transcript}</p></div><p className="text-sm theme-text-primary">{turn.tts_summary}</p></section>)}
-                {previousTurns.map(turn=><div key={turn.task.task_id} className="space-y-4"><div className="flex justify-end"><p className="theme-bg-secondary rounded-2xl px-4 py-3 text-sm max-w-xl">{voiceTranscripts[turn.task.task_id] || turn.task.instruction}</p></div><EngineeringStream task={tasks.find(t=>t.task_id===turn.task.task_id)||turn.task} events={turn.events} artifacts={turn.artifacts} approval={null} isStreaming={false} client={client} userRole={currentUser?.role} onResolved={onRefresh} onViewFile={path=>{void openFileDrawer();void handleSelectFile({path,is_dir:false,name:path} as WorkspaceItem);}}/></div>)}
+                {previousTurns.map(turn=><div key={turn.task.task_id} className="space-y-4"><div className="flex justify-end"><p className="theme-bg-secondary rounded-2xl px-4 py-3 text-sm max-w-xl">{voiceTranscripts[turn.task.task_id] || turn.task.instruction}</p></div><RecordedEngineeringTurn task={tasks.find(t=>t.task_id===turn.task.task_id)||turn.task} events={turn.events} artifacts={turn.artifacts} approval={null} isStreaming={false} client={client} userRole={currentUser?.role} onResolved={onRefresh} onViewFile={path=>{void openFileDrawer();void handleSelectFile({path,is_dir:false,name:path} as WorkspaceItem);}}/></div>)}
                 {/* User Message Bubble */}
                 <div className="flex items-start space-x-3 justify-end">
                   <div className="max-w-xl theme-bg-secondary theme-text-primary rounded-2xl px-4 py-3 text-sm font-medium leading-relaxed shadow-2xs border theme-border-subtle">
@@ -720,7 +822,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className="flex items-center space-x-2 px-3 py-1.5 theme-bg-surface border theme-border rounded-xl text-xs font-medium theme-text-primary shadow-2xs hover:theme-bg-secondary transition-colors"
             >
               <Folder className="w-4 h-4 text-indigo-600" />
-              <span>{connectedPath ? connectedPath.split(/[\\/]/).pop() : 'Project'}</span>
+              <span className={!connectedPath && !projectId ? 'text-amber-600' : ''}>
+                {connectedPath ? connectedPath.split(/[\\/]/).pop() : projectId ? 'Project' : 'No project'}
+              </span>
               <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
             </button>
 
@@ -860,7 +964,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       className="w-full flex items-center space-x-2 px-2.5 py-1.5 text-left text-xs theme-text-primary hover:theme-bg-secondary rounded-lg transition-colors"
                     >
                       <Code2 className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Add Context</span>
+                      <span>Add Context File</span>
                     </button>
                   </div>
                 )}
@@ -915,20 +1019,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <Mic className="w-4 h-4" />
                 </button>
 
-                <VoiceControl client={client} liveOnly readAloud={preferences.readAloud}
-                  disabled={isVoiceInputRecording || isSubmitting || preferences.busy}
-                  onActiveChange={setIsLiveAgentActive}
-                  onTurnResult={result=>{if(result.task_id)setVoiceTranscripts(prev=>({...prev,[result.task_id!]:result.transcript}));else setVoiceTurns(prev=>[...prev,result]);}}
-                  onTaskCreated={(taskId) => { if(activeTask && activeTask.task_id!==taskId)setPreviousTurns(prev=>[...prev,{task:activeTask,events:streamEvents,artifacts:taskArtifacts}]);setActiveTaskId(taskId); onRefresh(); }}
-                />
+                <button type="button" disabled aria-label="Live temporarily unavailable"
+                  title="Live Mode is temporarily unavailable" className="px-3 py-1.5 rounded-full border theme-border text-xs theme-text-muted opacity-60 cursor-not-allowed">
+                  Live · unavailable
+                </button>
 
                 {/* Circular Send Button */}
+                {isAttaching && (
+                  <span className="flex items-center gap-1 text-[11px] theme-text-muted">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Reading…
+                  </span>
+                )}
                 <button
                   type="button"
-                  disabled={!inputText.trim() || isSubmitting || preferences.busy}
+                  disabled={!inputText.trim() || isSubmitting || isAttaching || preferences.busy || projectBusy || !projectId}
                   onClick={() => handleSubmitTask()}
                   className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-30 disabled:hover:bg-indigo-600 text-white flex items-center justify-center transition-all shadow-md shrink-0"
-                  title="Send"
+                  title={!projectId ? 'Connect a project before sending' : 'Send'}
                   aria-label="Send"
                 >
                   {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" />}
@@ -953,82 +1061,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       </main>
-
-      {/* 4. CHAT HISTORY DRAWER */}
-      {showHistoryDrawer && (
-        <div className="fixed inset-0 z-50 flex justify-start bg-black/30 backdrop-blur-2xs" onClick={() => setShowHistoryDrawer(false)}>
-          <div
-            className="w-full max-w-xs h-full theme-bg-surface border-r theme-border shadow-2xl flex flex-col animate-in slide-in-from-left duration-150"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="h-13 px-4 border-b theme-border flex items-center justify-between shrink-0">
-              <div className="flex items-center space-x-2">
-                <History className="w-4 h-4 text-indigo-600" />
-                <span className="text-sm font-bold theme-text-primary">Chat History</span>
-              </div>
-              <button
-                onClick={() => setShowHistoryDrawer(false)}
-                className="p-1 theme-text-muted hover:theme-text-primary rounded-lg"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-2 space-y-1">
-              <button
-                onClick={() => {
-                  setActiveTaskId(null);
-                  setPreviousTurns([]);setVoiceTurns([]);setVoiceTranscripts({});
-                  setSubmittedTask(null);
-                  setShowHistoryDrawer(false);
-                }}
-                className="w-full flex items-center space-x-2 px-3 py-2 text-xs font-semibold text-indigo-600 hover:bg-indigo-500/10 rounded-xl transition-colors border border-indigo-500/20 mb-2"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>New Chat</span>
-              </button>
-
-              {tasks.length === 0 ? (
-                <p className="text-xs theme-text-muted p-3 text-center">No recent tasks.</p>
-              ) : (
-                tasks.map((t) => {
-                  const isSelected = t.task_id === activeTaskId;
-                  return (
-                    <div
-                      key={t.task_id}
-                      onClick={() => {
-                        setActiveTaskId(t.task_id);
-                        setShowHistoryDrawer(false);
-                      }}
-                      className={`p-2.5 rounded-xl cursor-pointer text-xs transition-colors ${
-                        isSelected
-                          ? 'bg-indigo-500/10 border border-indigo-500/30 text-indigo-600 font-semibold'
-                          : 'hover:theme-bg-secondary theme-text-primary border border-transparent'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between pb-1">
-                        <span className="font-mono text-[10px] theme-text-muted">#{t.task_id.slice(0, 8)}</span>
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            t.status === 'COMPLETED'
-                              ? 'bg-emerald-500'
-                              : t.status === 'WAITING_APPROVAL'
-                              ? 'bg-amber-500'
-                              : t.status === 'FAILED'
-                              ? 'bg-rose-500'
-                              : 'bg-indigo-600'
-                          }`}
-                        />
-                      </div>
-                      <p className="truncate font-medium">{t.instruction}</p>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* 5. SCHEDULED TASKS MODAL */}
       {showScheduledModal && (
@@ -1145,7 +1177,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <FolderPlus className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold theme-text-primary">Connect Project</h3>
+                  <h3 className="text-sm font-bold theme-text-primary">{createProjectMode?'Create Project':'Connect Project'}</h3>
                   <p className="text-xs theme-text-muted">Attach a repository directory to workspace</p>
                 </div>
               </div>
@@ -1158,12 +1190,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
 
             <form onSubmit={handleConnectProject} className="space-y-4">
+              <div className="flex gap-2 text-xs"><button type="button" aria-pressed={!createProjectMode} onClick={()=>setCreateProjectMode(false)} className="px-3 py-2 border theme-border rounded-lg">Connect existing</button><button type="button" aria-pressed={createProjectMode} onClick={()=>setCreateProjectMode(true)} className="px-3 py-2 border theme-border rounded-lg">Create new</button></div>
+              <label className="block text-xs">Project name {createProjectMode?'':'(optional)'}<input aria-label="Project name" required={createProjectMode} value={projectNameInput} onChange={e=>setProjectNameInput(e.target.value)} className="block mt-1 w-full theme-bg-secondary border theme-border rounded-lg p-2"/></label>
               <div className="space-y-1">
-                <label className="text-xs font-bold theme-text-primary">Project Directory Path</label>
+                <label htmlFor="project-directory" className="text-xs font-bold theme-text-primary">{createProjectMode?'Parent directory':'Project directory'}</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. C:\Users\evo\AgentOS\workspace\test-project"
+                  id="project-directory" placeholder="Absolute path to an external project directory"
                   value={projectPathInput}
                   onChange={(e) => setProjectPathInput(e.target.value)}
                   className="w-full theme-bg-secondary border theme-border rounded-xl px-3.5 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500 theme-text-primary"
@@ -1191,7 +1225,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   className="flex items-center space-x-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-xs transition-all"
                 >
                   {modalLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>Attach Project</span>
+                  <span>{createProjectMode?'Create Project':'Connect Project'}</span>
                 </button>
               </div>
             </form>

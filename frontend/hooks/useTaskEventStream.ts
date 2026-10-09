@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { TaskEvent } from '../types';
 
 export function useTaskEventStream(taskId: string | null, token?: string | null) {
@@ -33,9 +33,9 @@ export function useTaskEventStream(taskId: string | null, token?: string | null)
         if (disposed || data === 'pong') return;
         try {
           const event = JSON.parse(data) as TaskEvent;
-          if (!event.event_id || event.task_id !== taskId || seen.has(event.event_id)) return;
+          if (typeof event.event_id !== 'string' || typeof event.event_type !== 'string' || !Number.isFinite(Date.parse(event.timestamp)) || event.task_id !== taskId || seen.has(event.event_id)) return;
           seen.add(event.event_id); lastEventId = event.event_id;
-          setEvents(prev => [...prev, event]);
+          setEvents(prev => [...prev, event].sort((a,b)=>Date.parse(a.timestamp)-Date.parse(b.timestamp)||a.event_id.localeCompare(b.event_id)));
         } catch { setError('Invalid event received'); }
       };
       socket.onerror = () => { if (!disposed) setError('Event stream interrupted; reconnecting'); };
@@ -49,5 +49,6 @@ export function useTaskEventStream(taskId: string | null, token?: string | null)
       disposed = true; clearTimeout(retry); clearInterval(heartbeat); socket?.close();
     };
   }, [taskId, token]);
-  return { events, isConnected, error };
+  const scopedEvents = useMemo(() => events.filter(event=>event.task_id===taskId), [events, taskId]);
+  return { events: scopedEvents, isConnected, error };
 }

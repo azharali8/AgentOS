@@ -61,9 +61,12 @@ class EventService:
         with get_db_session() as session:
             repo = EventRepository(session)
             models = repo.list_by_task(task_id, limit, offset)
+            from backend.app.services.project_service import ProjectService
+            scope = ProjectService.task_scope(task_id)
             res = []
             for m in models:
                 res.append({
+                    **scope,
                     "event_id": m.event_id,
                     "task_id": m.task_id,
                     "event_type": m.event_type,

@@ -13,7 +13,7 @@ class EventRepository:
         return event
 
     def list_by_task(self, task_id: str, limit: int = 100, offset: int = 0) -> List[EventModel]:
-        return self.session.query(EventModel).filter(EventModel.task_id == task_id).order_by(EventModel.timestamp.asc()).offset(offset).limit(limit).all()
+        return self.session.query(EventModel).filter(EventModel.task_id == task_id).order_by(EventModel.timestamp.asc(), EventModel.event_id.asc()).offset(offset).limit(limit).all()
 
     def count_by_task(self, task_id: str) -> int:
         from sqlalchemy import func

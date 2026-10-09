@@ -1,7 +1,7 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const ts=require('typescript');const vm=require('node:vm');const React=require('react');const {renderToStaticMarkup}=require('react-dom/server');
 function load(file,requires={}){const exports={};vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText,{exports,require:n=>requires[n]??require(n)});return exports;}
 const mapper=load('../lib/engineering-stream.ts');const {engineeringEntries,patchFiles,shouldFollowStream}=mapper;
-const {EngineeringStream}=load('../components/EngineeringStream.tsx',{'../lib/engineering-stream':mapper,'lucide-react':new Proxy({},{get:()=>props=>React.createElement('svg',props)})});
+const {EngineeringStream}=load('../components/EngineeringStream.tsx',{'./ImplementationReport':{SessionImplementationReport:()=>null},'../lib/engineering-stream':mapper,'lucide-react':new Proxy({},{get:()=>props=>React.createElement('svg',props)})});
 const task={task_id:'t',instruction:'Create endpoint',status:'EXECUTING',created_at:'2026-09-21T10:00:00Z'};
 const event=(type,payload={},second=1,id=type)=>({task_id:'t',event_id:id,event_type:type,payload,timestamp:`2026-09-21T10:00:${String(second).padStart(2,'0')}Z`});
 const render=(events=[],extra={})=>renderToStaticMarkup(React.createElement(EngineeringStream,{task,events,artifacts:[],approval:null,client:{},isStreaming:true,onResolved(){},onViewFile(){},...extra}));
@@ -56,7 +56,7 @@ test('no-event initial state indicates awaiting real Supervisor events',()=>{ass
 
 test('approval submits the current approval once and continues in place with real events',async()=>{
  let cursor=0;const state=[];const mockReact={...React,useMemo:fn=>fn(),useState:value=>{const i=cursor++;if(!(i in state))state[i]=value;return [state[i],v=>state[i]=v];}};
- const {EngineeringStream:Stream}=load('../components/EngineeringStream.tsx',{'react':mockReact,'../lib/engineering-stream':mapper,'lucide-react':new Proxy({},{get:()=>()=>null})});
+ const {EngineeringStream:Stream}=load('../components/EngineeringStream.tsx',{'react':mockReact,'./ImplementationReport':{SessionImplementationReport:()=>null},'../lib/engineering-stream':mapper,'lucide-react':new Proxy({},{get:()=>()=>null})});
  const calls=[];let refreshed=0;
  const props={task,events:[event('APPROVAL_REQUIRED',{approval_id:'a'})],artifacts:[],approval:{approval_id:'a',task_id:'t',status:'PENDING',arguments_summary:{}},userRole:'DEVELOPER',client:{resolveApproval:async(...args)=>calls.push(args)},onResolved:()=>refreshed++,onViewFile(){},isStreaming:true};
  const draw=()=>{cursor=0;return Stream(props);};
@@ -71,4 +71,25 @@ test('failed coding does not claim changes were proposed',()=>{const rows=mapper
 test('Auto routing audit does not expose provider model names in conversation',()=>{
  const html=render([event('MODEL_SELECTED',{mode:'AUTO_CLOUD',model:'private-cloud-name'}),event('MODEL_FAILOVER',{to_model:'other-cloud'},2)]);
  assert.match(html,/AgentOS Auto/);assert.doesNotMatch(html,/private-cloud-name|other-cloud/);
+});
+
+
+test('test artifacts associate by identity, never proximity to a different test run',()=>{
+ const events=[event('TEST_COMPLETED',{artifact_id:'failed-report',report:{passed:false,failed_count:1}},1),event('TEST_COMPLETED',{artifact_id:'passed-report',report:{passed:true,failed_count:0}},2,'retest')];
+ const artifacts=[{artifact_id:'passed-report',task_id:'t',artifact_type:'TEST_REPORT',created_at:events[0].timestamp,content:{passed:true,failed_count:0}},{artifact_id:'failed-report',task_id:'t',artifact_type:'TEST_REPORT',created_at:events[1].timestamp,content:{passed:false,failed_count:1}}];
+ const rows=engineeringEntries(task,events,artifacts).filter(r=>r.kind==='test');
+ assert.equal(rows.length,2);assert.equal(rows[0].artifact.artifact_id,'failed-report');assert.equal(rows[0].state,'failed');assert.equal(rows[1].artifact.artifact_id,'passed-report');
+});
+test('structured failure renders backend message and evidence fields',()=>{
+ const html=render([event('TEST_COMPLETED',{report:{passed:false,issues:[{message:'assert 2 == 5',classification:'assertion',likely_cause:'Observed subtraction',suggested_fix:'Use addition',source_snippet:'return a - b'}]}})]);
+ for(const text of ['assert 2 == 5','Classification: assertion','Observed subtraction','Use addition','return a - b'])assert.ok(html.includes(text));
+ assert.equal(patchFiles({files:['calculator.py']}).length,0);
+});
+
+test('legacy identical report is linked without guessing and approval replay stays one row',()=>{
+ const report={passed:true,passed_count:1,failed_count:0,exit_code:0};
+ const events=[event('TEST_COMPLETED',{report}),event('APPROVAL_REQUIRED',{approval_id:'a'},2),event('APPROVAL_RESOLVED',{approval_id:'a',approved:true},3),event('APPROVAL_RESOLVED',{approval_id:'a',approved:true},4,'again')];
+ const rows=engineeringEntries(task,events,[{artifact_id:'legacy',task_id:'t',artifact_type:'TEST_REPORT',created_at:task.created_at,content:report}]);
+ assert.equal(rows.filter(r=>r.kind==='test').length,1);
+ assert.equal(rows.filter(r=>r.title==='Approval resolved').length,1);
 });

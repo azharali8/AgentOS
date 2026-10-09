@@ -320,4 +320,4 @@ The repository does not yet include a dedicated contributing guide or a document
 
 ## License
 
-The repository contains an empty [LICENSE](LICENSE) file. No license terms have been specified; an open-source license cannot currently be stated.
+AgentOS is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the full terms.

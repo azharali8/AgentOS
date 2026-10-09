@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 from backend.app.config.settings import settings
 from backend.app.db.database import Base
 from backend.app.db.models import TaskModel
+from backend.app.auth.service import AuthenticatedUser, UserRole
+
+USER = AuthenticatedUser(user_id="workspace-test", username="workspace-test", role=UserRole.DEVELOPER)
 from backend.app.api.routes.v1 import (
     WorkspaceSetRootRequest, set_workspace_root, disconnect_workspace_v1,
 )
@@ -23,6 +26,7 @@ def workspace_db(tmp_path, monkeypatch):
             yield db
             db.commit()
     monkeypatch.setattr(database, "get_db_session", session)
+    monkeypatch.setattr("backend.app.services.project_service.get_db_session", session)
     monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path / "installation")
     monkeypatch.setattr(settings, "WORKSPACE_ROOT", str(tmp_path / "original"))
     yield session
@@ -36,7 +40,7 @@ def test_project_switch_and_disconnect_reject_active_tasks(workspace_db, tmp_pat
     project = tmp_path / "project-b"
     project.mkdir()
     before = settings.WORKSPACE_ROOT
-    for change in (lambda: set_workspace_root(WorkspaceSetRootRequest(path=str(project))), disconnect_workspace_v1):
+    for change in (lambda: set_workspace_root(WorkspaceSetRootRequest(path=str(project)), USER), lambda: disconnect_workspace_v1(USER)):
         with pytest.raises(HTTPException) as exc:
             change()
         assert exc.value.status_code == 409
@@ -47,10 +51,10 @@ def test_connect_change_disconnect_updates_backend_without_env_persistence(works
     for name in ("project-a", "project-b"):
         project = tmp_path / name
         project.mkdir()
-        response = set_workspace_root(WorkspaceSetRootRequest(path=str(project)))
+        response = set_workspace_root(WorkspaceSetRootRequest(path=str(project)), USER)
         assert response["path"] == str(project)
         assert response["persisted"] is False
         assert settings.WORKSPACE_ROOT == str(project)
-    response = disconnect_workspace_v1()
+    response = disconnect_workspace_v1(USER)
     assert response["disconnected"]
     assert settings.WORKSPACE_ROOT == str(tmp_path / "installation" / "workspace")

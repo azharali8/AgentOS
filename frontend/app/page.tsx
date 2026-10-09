@@ -35,7 +35,7 @@ export default function Home() {
     if (!token) return;
     try {
       const [fetchedTasks, fetchedAgents, fetchedModels] = await Promise.all([
-        client.listTasks(50),
+        Promise.resolve([] as Task[]),
         client.listAgents(),
         client.getModels().catch(() => null),
       ]);

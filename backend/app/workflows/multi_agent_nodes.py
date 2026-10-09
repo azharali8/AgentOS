@@ -169,7 +169,9 @@ def parallel_execution_node(state: MultiAgentState) -> Dict[str, Any]:
             EventService.record_event(
                 task_id,
                 "TEST_COMPLETED",
-                payload={"report": res.evidence.get("structured_report", {})},
+                payload={"report": res.evidence.get("structured_report", {}),
+                         "artifact_id": res.evidence.get("test_report_artifact_id"),
+                         "subtask_id": s_id},
             )
         if res.status in (AgentStatus.FAILED, AgentStatus.TIMEOUT, AgentStatus.CANCELLED):
             fatal_error = res.error or res.summary
@@ -289,7 +291,8 @@ def human_approval_node(state: MultiAgentState) -> Dict[str, Any]:
         EventService.record_event(
             task_id,
             "PATCH_APPLIED",
-            payload={"applied": apply_outcome.get("applied"), "files": apply_outcome.get("modified_files")},
+            payload={"applied": apply_outcome.get("applied"), "files": apply_outcome.get("modified_files"),
+                     "patch_id": patch_obj.patch_id, "approval_id": approval_id},
         )
         if not apply_outcome.get("applied"):
             return {"status": "FAILED", "error": apply_outcome.get("error") or str(apply_outcome.get("errors") or "Patch application failed")}

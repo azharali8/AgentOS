@@ -11,10 +11,15 @@ export function safeDisplay(value:unknown):string {
  return value.replace(/(?:Bearer\s+)[\w.\-]+/gi,'Bearer [redacted]').replace(/((?:api[_-]?key|token|password|secret)\s*[:=]\s*)[^\s,;]+/gi,'$1[redacted]').replace(/[A-Z]:[\\/](?:[^\s'"<>]+[\\/])*[^\s'"<>]*/gi,'[local path]').slice(0,16000);
 }
 export function patchFiles(content:Record<string,any>) {
- return (Array.isArray(content.files)?content.files:[]).map((file:any)=>{
+ return (Array.isArray(content.files)?content.files:[]).filter((file:any)=>file && typeof file==='object' && typeof file.relative_path==='string').map((file:any)=>{
   const lines:string[]=(file.hunks||[]).flatMap((h:any)=>h.lines||[]).filter((l:any)=>typeof l==='string');
   return {path:String(file.relative_path||''),lines,added:lines.filter(l=>l.startsWith('+')).length,removed:lines.filter(l=>l.startsWith('-')).length};
  });
+}
+function canonicalEvidence(value:any):string {
+ if(Array.isArray(value))return '['+value.map(canonicalEvidence).join(',')+']';
+ if(value&&typeof value==='object')return '{'+Object.keys(value).filter(key=>key!=='artifact_id'&&value[key]!==undefined).sort().map(key=>JSON.stringify(key)+':'+canonicalEvidence(value[key])).join(',')+'}';
+ return JSON.stringify(value);
 }
 export function engineeringEntries(task:Task,events:TaskEvent[],artifacts:Artifact[]):EngineeringEntry[]{
  const rows:EngineeringEntry[]=[];const keys=new Map<string,EngineeringEntry>();const ids=new Set<string>();
@@ -34,12 +39,13 @@ export function engineeringEntries(task:Task,events:TaskEvent[],artifacts:Artifa
   }
   else if(type==='PATCH_CREATED')add({...base,id:`patch:${p.patch_id||e.event_id}`,kind:'patch',title:'Proposed changes',data:{patch_id:p.patch_id,files:p.files}});
   else if(type==='PATCH_APPLIED')add({...base,id:`applied:${p.patch_id||p.patch_hash||e.event_id}`,kind:'action',title:p.applied===false?'Patch application failed':'Changes applied',state:p.applied===false?'failed':'done',detail:(p.files||p.modified_files||[]).join(', ')});
-  else if(type==='TEST_COMPLETED')add({...base,id:`test:${e.event_id}`,kind:'test',title:p.report?.passed===true?'Tests passed':'Test results',state:p.report?.passed===false?'failed':'done',data:p.report||{}});
+  else if(type==='TEST_COMPLETED')add({...base,id:`test:${e.event_id}`,kind:'test',title:p.report?.passed===true?'Tests passed':'Test results',state:p.report?.passed===false?'failed':'done',data:{...p.report,artifact_id:p.artifact_id}});
   else if(['DEBUG_DIAGNOSIS_CREATED','REPLAN_TRIGGERED'].includes(type))add({...base,id:e.event_id,kind:'diagnosis',title:type==='REPLAN_TRIGGERED'?'Replanning after failure':'Diagnosis available',detail:safeDisplay(p.summary||p.reason),data:p.diagnosis});
   else if(['APPROVAL_REQUIRED','APPROVAL_REQUESTED'].includes(type))add({...base,id:`approval:${p.approval_id}`,kind:'approval',title:'Changes ready for review',state:'waiting',data:p});
   else if(type==='APPROVAL_RESOLVED'){
-   const previous=keys.get(`approval:${p.approval_id}`);if(previous){previous.state='done';previous.title='Approval resolved';}
-   add({...base,id:e.event_id,kind:'action',title:p.approved===false||p.decision==='REJECTED'?'Changes rejected':'Approval resolved'});
+   const id=`approval:${p.approval_id||e.event_id}`;
+   const row=keys.get(id)||add({...base,id,kind:'action',title:'Approval resolved'});
+   row.state='done';row.title=p.approved===false||p.decision==='REJECTED'?'Changes rejected':'Approval resolved';
   }
  }
  for(const art of artifacts.filter(a=>a.task_id===task.task_id)){
@@ -47,12 +53,14 @@ export function engineeringEntries(task:Task,events:TaskEvent[],artifacts:Artifa
   if(art.artifact_type==='PATCH'){
    const row=keys.get(`patch:${c.patch_id}`)||add({id:`patch:${c.patch_id||art.artifact_id}`,time:art.created_at,kind:'patch',title:'Proposed changes',state:'done'});row.artifact=art;row.data=c;
   }else if(art.artifact_type==='TEST_REPORT'){
-   const candidate=rows.filter(r=>r.kind==='test'&&!r.artifact).find(r=>Math.abs(Date.parse(r.time)-Date.parse(art.created_at))<10000);
+   const candidates=rows.filter(r=>r.kind==='test'&&!r.artifact);
+   const legacy=candidates.filter(r=>!r.data?.artifact_id&&canonicalEvidence(r.data)===canonicalEvidence(c));
+   const candidate=candidates.find(r=>r.data?.artifact_id===art.artifact_id)||(legacy.length===1?legacy[0]:undefined);
    const row=candidate||add({id:`artifact:${art.artifact_id}`,time:art.created_at,kind:'test',title:c.passed===true?'Tests passed':'Test results',state:c.passed===false?'failed':'done'});row.artifact=art;row.data={...c,...row.data};
   }else if(['REVIEW','DIAGNOSIS'].includes(art.artifact_type))add({id:`artifact:${art.artifact_id}`,time:art.created_at,kind:art.artifact_type.toLowerCase(),title:art.artifact_type==='REVIEW'?(c.approved?'Review approved':'Review findings'):'Diagnosis',state:c.approved===false?'failed':'done',detail:safeDisplay(c.summary||c.root_cause),artifact:art,data:c});
  }
- const stopped=taskIsTerminal(task.status)||task.status==='WAITING_APPROVAL';
- if(stopped)for(const r of rows)if(r.state==='active'){r.state=task.status==='FAILED'?'failed':'done';}
+ const stopped=taskIsTerminal(task.status)||['WAITING_APPROVAL','PAUSED'].includes(task.status);
+ if(stopped)for(const r of rows)if(r.state==='active'){r.state=task.status==='FAILED'?'failed':task.status==='PAUSED'?'waiting':'done';}
  if(taskIsTerminal(task.status))add({id:'final',time:task.completed_at||task.updated_at||ordered[ordered.length-1]?.e.timestamp||task.created_at,kind:'final',title:task.status==='COMPLETED'?'Work completed':task.status==='FAILED'?'Execution stopped':'Task cancelled',state:task.status==='COMPLETED'?'done':'failed',detail:safeDisplay(task.error||task.result_summary)});
  return rows.sort((a,b)=>Date.parse(a.time)-Date.parse(b.time));
 }

@@ -99,16 +99,32 @@ export class AgentOSClient {
     return this.request<any>('/api/v1/system/metrics');
   }
 
+  async createProject(name:string,location:string):Promise<any>{return this.request('/api/v1/workspace/create-project',{method:'POST',body:JSON.stringify({name,location,auto_start_task:false})});}
+  async projects(offset = 0): Promise<{projects: ProjectRecord[]; active_project_id: string|null}> { return this.request(`/api/v1/projects?offset=${offset}`); }
+  async activateProject(id:string): Promise<ProjectRecord> {return this.request(`/api/v1/projects/${encodeURIComponent(id)}/activate`,{method:'POST'});}
+  async conversations(id:string, offset = 0): Promise<ConversationRecord[]> {return this.request(`/api/v1/projects/${encodeURIComponent(id)}/conversations?offset=${offset}`);}
+  async conversationTasks(project:string,conversation:string): Promise<Task[]> {
+    // Load only task summaries for the selected conversation; event history stays lazy.
+    const tasks: Task[] = [];
+    while (true) {
+      const page = await this.request<Task[]>(`/api/v1/projects/${encodeURIComponent(project)}/conversations/${encodeURIComponent(conversation)}/tasks?limit=100&offset=${tasks.length}`);
+      tasks.push(...page);
+      if (page.length < 100) return tasks;
+    }
+  }
+
   // Tasks
   async createTask(
     task: string,
     priority: number = 1,
-    options: { requested_agent?: string; execution_mode?: string; sync?: boolean; attachments?: {name:string;content:string}[] } = {}
+    options: { project_id?: string; conversation_id?: string; requested_agent?: string; execution_mode?: string; sync?: boolean; attachments?: {name:string;content:string}[] } = {}
   ): Promise<Task> {
     return this.request<Task>('/api/v1/tasks', {
       method: 'POST',
       body: JSON.stringify({
         task,
+        project_id: options.project_id,
+        conversation_id: options.conversation_id,
         priority,
         requested_agent: options.requested_agent,
         execution_mode: options.execution_mode || 'autonomous',
@@ -144,14 +160,22 @@ export class AgentOSClient {
     return this.request<any>(`/api/v1/tasks/${taskId}/result`);
   }
 
-  async getTaskEvents(taskId: string): Promise<TaskEvent[]> {
-    return this.request<TaskEvent[]>(`/api/v1/tasks/${taskId}/events`);
+  async getTaskEvents(taskId: string, offset = 0, limit = 100): Promise<TaskEvent[]> {
+    return this.request<TaskEvent[]>(`/api/v1/tasks/${taskId}/events?offset=${offset}&limit=${limit}`);
   }
 
   async cancelTask(taskId: string): Promise<any> {
     return this.request<any>(`/api/v1/tasks/${taskId}/cancel`, {
       method: 'POST',
     });
+  }
+
+  async getImplementationReport(taskId: string): Promise<ImplementationReport> {
+    return this.request(`/api/v1/tasks/${encodeURIComponent(taskId)}/implementation-report`);
+  }
+
+  async getArtifact(artifactId: string): Promise<{task_id:string;content:Record<string,unknown>}> {
+    return this.request(`/api/v1/artifacts/${encodeURIComponent(artifactId)}`);
   }
 
   async getTaskArtifacts(taskId: string): Promise<any[]> {
@@ -335,3 +359,19 @@ export class AgentOSClient {
 
 
 export interface LocalModels { cloud_status?:string; models: {name:string;cloud?:boolean;size:number;selectable:boolean;status:string;recommended:boolean}[]; active_model:string; provider:string; status:string; selection_enabled:boolean; }
+
+export type ProjectRecord = {project_id:string; name:string; workspace_path:string; created_at:string};
+export type ConversationRecord = {conversation_id:string; project_id:string; title:string; created_at:string};
+
+export interface ImplementationReport {
+  report_id:string; task_id:string; project_id?:string; status:string; task_status:string; summary:string;
+  changes:{category:string;description:string}[];
+  files_changed:{path:string;additions:number|null;deletions:number|null;diffs:string[]}[];
+  commands:{command:string;exit_code:number|null;status:string;artifact_id:string}[];
+  tools:{execution_id:string;tool:string;operation:string;status:string}[];
+  tests:{artifact_id:string;command:string;passed:boolean;passed_count:number|null;failed_count:number|null;skipped_count:number|null;exit_code:number|null}[];
+  approvals:{approval_id:string;status:string}[];
+  reviews:{artifact_id:string;status:string;summary?:string}[];
+  artifacts:{artifact_id:string;type:string;label:string}[];
+  remaining_issues:string[];warnings:string[];
+}

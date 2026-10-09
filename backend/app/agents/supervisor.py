@@ -418,12 +418,13 @@ class SupervisorAgent:
             elif agent_type == AgentType.TESTING:
                 res = self.testing_agent.execute(subtask)
                 if res.evidence.get("structured_report"):
-                    ArtifactService.save(
+                    report_artifact = ArtifactService.save(
                         task_id=subtask.task_id,
                         agent_id="testing",
                         artifact_type=ArtifactType.TEST_REPORT,
                         content=res.evidence["structured_report"],
                     )
+                    res.evidence["test_report_artifact_id"] = report_artifact.artifact_id
             elif agent_type == AgentType.DATA_ENGINEER:
                 res = self.data_engineer_agent.execute(subtask)
                 if res.evidence.get("structured_report"):

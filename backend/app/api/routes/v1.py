@@ -38,6 +38,7 @@ from backend.app.security.sensitive_files import is_sensitive_path
 
 from backend.app.services.multi_agent_service import MultiAgentService
 from backend.app.services.workspace_service import WorkspaceService
+from backend.app.services.workspace_transition import workspace_transition
 from backend.app.models.approval import ApprovalRequest, ApprovalResponse, ApprovalStatus
 from backend.app.config.settings import settings
 
@@ -65,6 +66,8 @@ def get_artifact(artifact_id: str, user: AuthenticatedUser = Depends(get_current
         art = ArtifactService.get(artifact_id)
         if not art:
             raise HTTPException(status_code=404, detail=f"Artifact '{artifact_id}' not found")
+        from backend.app.services.project_service import ProjectService
+        ProjectService.task_scope(art.task_id, user.user_id)
         return art.model_dump()
     except ArtifactIntegrityError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -174,6 +177,8 @@ def logout_v1(request: Request, user: AuthenticatedUser = Depends(get_current_us
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TaskCreateRequestV1(BaseModel):
+    project_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     task: str = Field(..., min_length=3, description="Task prompt or instruction")
     context: Dict[str, Any] = Field(default_factory=dict, description="Context metadata")
     priority: int = Field(default=1, ge=1, le=10, description="Priority")
@@ -198,17 +203,25 @@ class TaskResponseV1(BaseModel):
 
 
 @tasks_v1.post("", response_model=TaskResponseV1, status_code=201)
+@workspace_transition
 def create_task(req: TaskCreateRequestV1, user: AuthenticatedUser = Depends(require_role(UserRole.USER))):
     """
     Submit a task to the AgentOS execution platform and start the real Supervisor/LangGraph execution.
     """
     RateLimiter.check_rate_limit(f"task_create:{user.user_id}")
+    from backend.app.services.project_service import ProjectService
+    if req.conversation_id and not req.project_id:
+        raise HTTPException(400, "Conversation requires a project")
+    if req.project_id:
+        ProjectService.validate_submission(req.project_id, req.conversation_id, user.user_id)
     
     from backend.app.models.task import TaskRequest
     from backend.app.services.task_context import instruction_with_context
     req.task = instruction_with_context(req.task, req.context.get("attachments"))
     task_req = TaskRequest(instruction=req.task)
     task_record = TaskService.create_task(request=task_req)
+    if req.project_id:
+        ProjectService.attach_task(task_record.task_id, req.project_id, req.conversation_id, user.user_id, req.task)
     from backend.app.services.local_model_settings import model_preference
     from backend.app.db.database import get_db_session
     from backend.app.db.models import TaskModel
@@ -257,7 +270,7 @@ def create_task(req: TaskCreateRequestV1, user: AuthenticatedUser = Depends(requ
         result_summary=task_record.final_response,
         request_id=str(uuid.uuid4()),
         error=task_record.error,
-        metadata=req.metadata,
+        metadata=(TaskService.get_task(task_record.task_id).metadata or {}),
     )
 
 
@@ -271,7 +284,8 @@ def list_tasks(
     tasks = TaskService.list_tasks(limit=limit, offset=offset)
     user_tasks = [
         t for t in tasks 
-        if user.role == UserRole.ADMIN or getattr(t, "user_id", None) in (None, user.user_id)
+        if (t.metadata or {}).get("project_owner", user.user_id) == user.user_id
+        and (user.role == UserRole.ADMIN or getattr(t, "user_id", None) in (None, user.user_id))
     ]
     return [
         TaskResponseV1(
@@ -291,6 +305,8 @@ def list_tasks(
 @tasks_v1.get("/{task_id}", response_model=TaskResponseV1)
 def get_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user)):
     """Get single task details with ownership authorization check."""
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -307,12 +323,15 @@ def get_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user)):
         completed_at=task.completed_at,
         result_summary=task.final_response,
         error=task.error,
+        metadata=task.metadata or {},
     )
 
 
 @tasks_v1.get("/{task_id}/status")
 def get_task_status(task_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
     """Retrieve simplified task execution lifecycle status."""
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -335,6 +354,8 @@ def get_task_status(task_id: str, user: AuthenticatedUser = Depends(get_current_
 @tasks_v1.get("/{task_id}/result")
 def get_task_result(task_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
     """Get final structured result summary of a task."""
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -360,6 +381,8 @@ def get_task_events(
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
     """Get chronological append-only events for a task."""
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -370,9 +393,17 @@ def get_task_events(
     return EventService.list_events(task_id=task_id, limit=limit, offset=offset)
 
 
+@tasks_v1.get("/{task_id}/implementation-report")
+def get_implementation_report(task_id: str, user: AuthenticatedUser = Depends(get_current_user)):
+    from backend.app.services.implementation_report import build_implementation_report
+    return build_implementation_report(task_id, user.user_id)
+
+
 @tasks_v1.post("/{task_id}/cancel")
 def cancel_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
     """Execute two-phase task cancellation with ownership verification."""
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -391,6 +422,8 @@ def cancel_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user
 @tasks_v1.post("/{task_id}/pause")
 def pause_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
     """Gracefully pause an executing task."""
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -411,6 +444,8 @@ def resume_task_model(task_id: str, user: AuthenticatedUser = Depends(require_ro
     from backend.app.services.multi_agent_service import MultiAgentService
     from backend.app.services.local_model_settings import model_preference, local_models
     from backend.app.services.cloud_model_pool import AUTO
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(404, 'Task not found')
@@ -430,6 +465,8 @@ def resume_task_model(task_id: str, user: AuthenticatedUser = Depends(require_ro
 @tasks_v1.post("/{task_id}/resume")
 def resume_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
     """Resume a paused or interrupted task from durable checkpoint."""
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -454,6 +491,8 @@ def resume_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user
 @tasks_v1.get("/{task_id}/artifacts")
 def get_task_artifacts(task_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> List[Dict[str, Any]]:
     """List immutable artifacts generated for a task with read-time integrity checks."""
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -466,6 +505,8 @@ def get_task_artifacts(task_id: str, user: AuthenticatedUser = Depends(get_curre
 @tasks_v1.get("/{task_id}/context")
 def get_task_context(task_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
     """Inspect bounded context bundle and explanation assembled for this task."""
+    from backend.app.services.project_service import ProjectService
+    ProjectService.task_scope(task_id, user.user_id)
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -828,13 +869,25 @@ def list_approvals_v1(
     user: AuthenticatedUser = Depends(get_current_user),
 ):
     """List pending and resolved approvals with pagination."""
-    return ApprovalManager.list_approvals(limit=limit, offset=offset)
+    records = ApprovalManager.list_approvals(limit=limit, offset=offset)
+    from backend.app.services.project_service import ProjectService
+    visible = []
+    for record in records:
+        try:
+            ProjectService.task_scope(record.task_id, user.user_id)
+            visible.append(record)
+        except HTTPException:
+            continue
+    return visible
 
 
 @approvals_v1.get("/{approval_id}", response_model=ApprovalRequest)
 def get_approval_v1(approval_id: str, user: AuthenticatedUser = Depends(get_current_user)):
     """Get details of an approval request."""
     record = ApprovalManager.get_approval(approval_id)
+    if record:
+        from backend.app.services.project_service import ProjectService
+        ProjectService.task_scope(record.task_id, user.user_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")
     return record
@@ -851,6 +904,9 @@ def resolve_approval_v1(
     Requires DEVELOPER or ADMIN role.
     """
     record = ApprovalManager.get_approval(approval_id)
+    if record:
+        from backend.app.services.project_service import ProjectService
+        ProjectService.task_scope(record.task_id, user.user_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Approval '{approval_id}' not found")
 
@@ -975,6 +1031,7 @@ class WorkspaceSetRootRequest(BaseModel):
 
 
 @workspace_v1.post("/set-root")
+@workspace_transition
 def set_workspace_root(
     req: WorkspaceSetRootRequest,
     user: AuthenticatedUser = Depends(require_role(UserRole.DEVELOPER)),
@@ -1076,10 +1133,13 @@ def set_workspace_root(
             )
 
     display_name = req.name.strip() or target.name
+    from backend.app.services.project_service import ProjectService
+    project = ProjectService.register(str(target), display_name, user.user_id)
 
     return {
         "status": "ok",
         "root": display_name,
+        "project": project,
         "path": str(target),
         "files_count": files_count,
         "dirs_count": dirs_count,
@@ -1099,6 +1159,7 @@ def _require_idle_workspace():
 
 
 @workspace_v1.post("/disconnect")
+@workspace_transition
 def disconnect_workspace_v1(
     user: AuthenticatedUser = Depends(require_role(UserRole.DEVELOPER)),
 ) -> Dict[str, Any]:
@@ -1116,6 +1177,8 @@ def disconnect_workspace_v1(
     default_workspace = (agentos_root / "workspace").resolve()
     default_workspace.mkdir(parents=True, exist_ok=True)
 
+    from backend.app.services.project_service import ProjectService
+    ProjectService.deselect(user.user_id)
     settings.WORKSPACE_ROOT = str(default_workspace)
     os.environ["WORKSPACE_ROOT"] = str(default_workspace)
 
@@ -1194,6 +1257,7 @@ class CreateProjectRequestV1(BaseModel):
 
 
 @workspace_v1.post("/create-project")
+@workspace_transition
 def create_project_v1(
     req: CreateProjectRequestV1,
     user: AuthenticatedUser = Depends(require_role(UserRole.DEVELOPER)),
@@ -1202,6 +1266,7 @@ def create_project_v1(
     Create a new software project from scratch and establish it as the active workspace.
     Optionally launches the Supervisor multi-agent engineering workflow to implement the instruction.
     """
+    _require_idle_workspace()
     from backend.app.services.project_creator import (
         ProjectCreatorService,
         ProjectCreationError,
@@ -1221,6 +1286,8 @@ def create_project_v1(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(exc)}")
 
+    from backend.app.services.project_service import ProjectService
+    project = ProjectService.register(project_meta['path'], req.name, user.user_id)
     task_id = None
     if req.instruction and req.instruction.strip() and req.auto_start_task:
         from backend.app.models.task import TaskRequest
@@ -1231,6 +1298,13 @@ def create_project_v1(
         task_req = TaskRequest(instruction=req.instruction.strip())
         task_record = TaskService.create_task(request=task_req)
         task_id = task_record.task_id
+        ProjectService.attach_task(task_id, project['project_id'], None, user.user_id, req.instruction.strip())
+        from backend.app.services.local_model_settings import model_preference
+        from backend.app.db.database import get_db_session
+        from backend.app.db.models import TaskModel
+        with get_db_session() as db:
+            record = db.get(TaskModel, task_id)
+            record.task_metadata = {**record.task_metadata, 'model_selection': model_preference(user.user_id), 'model_owner': user.user_id}
 
         EventService.record_event(
             task_id=task_id,
@@ -1315,6 +1389,13 @@ async def stream_task_events_ws(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid or expired session token")
             return
 
+    if settings.AUTH_ENABLED:
+        from backend.app.services.project_service import ProjectService
+        try:
+            ProjectService.task_scope(task_id, user.user_id)
+        except HTTPException:
+            await websocket.close(code=1008, reason="Task not found")
+            return
     await websocket.accept()
     try:
         # Send initial connection event
@@ -1374,3 +1455,6 @@ from backend.app.voice.router import router as voice_v1
 v1_router.include_router(voice_v1)
 
 
+
+from backend.app.api.routes.projects import router as projects_router
+v1_router.include_router(projects_router)
