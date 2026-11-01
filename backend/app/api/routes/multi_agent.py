@@ -1,16 +1,24 @@
 """
 AgentOS Phase 5 — Multi-Agent REST API Endpoints.
+
+Authorization note: all multi-agent endpoints that expose task-level data or
+mutate task state require an authenticated user and enforce ownership via
+ProjectService.task_scope().  The agent-registry read endpoints (list, get,
+capabilities, metrics) expose only static configuration and do not require
+ownership checks.
 """
 
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
+from backend.app.auth.service import AuthenticatedUser, UserRole, get_current_user, require_role
 from backend.app.models.multi_agent import AgentDefinition, AgentType
 from backend.app.models.task import TaskResult
 from backend.app.agents.registry import AgentRegistry
 from backend.app.services.agent_message_bus import AgentMessageBus
 from backend.app.services.multi_agent_service import MultiAgentService
+from backend.app.services.project_service import ProjectService
 
 agents_router = APIRouter(prefix="/agents", tags=["agents"])
 multi_agent_router = APIRouter(prefix="/multi-agent", tags=["multi-agent"])
@@ -25,7 +33,28 @@ class ApprovalResolution(BaseModel):
     approved: bool = Field(default=True)
 
 
+def _require_multi_agent_owner(task_id: str, user: AuthenticatedUser) -> None:
+    """Enforce ownership for multi-agent task routes.
+
+    Uses the same ProjectService.task_scope() path used by v1 task endpoints
+    so that the two route families share one consistent authorization check.
+    Raises HTTP 404 for both missing and unauthorised tasks to avoid leaking
+    existence information.
+
+    Legacy tasks that are not attached to any project are only accessible to
+    ADMIN users; regular users cannot access unscoped tasks regardless of
+    whether they know the task ID.
+    """
+    scope = ProjectService.task_scope(task_id, user.user_id)
+    if not scope:
+        # Task exists but has no project affiliation.
+        # Only ADMIN may access legacy/unscoped tasks.
+        if user.role != UserRole.ADMIN:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+
 # ── Agent Registry Endpoints ──────────────────────────────────────────
+# These expose static agent configuration only; no task data; no auth required.
 
 @agents_router.get("", response_model=List[AgentDefinition])
 def list_agents() -> List[AgentDefinition]:
@@ -76,10 +105,8 @@ def get_agent_metrics(name: str) -> Dict[str, Any]:
     return profile.model_dump()
 
 
-from backend.app.auth.service import UserRole, get_current_user
-
 @agents_router.post("/{name}/invoke")
-def invoke_agent(name: str, payload: Dict[str, Any], user=Depends(get_current_user)) -> Dict[str, Any]:
+def invoke_agent(name: str, payload: Dict[str, Any], user: AuthenticatedUser = Depends(get_current_user)) -> Dict[str, Any]:
     agent = AgentRegistry.get(name)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
@@ -107,12 +134,20 @@ def register_agent(agent_def: AgentDefinition) -> AgentDefinition:
 # ── Multi-Agent Execution Endpoints ───────────────────────────────────
 
 @multi_agent_router.post("/run", response_model=TaskResult)
-def run_multi_agent_task(req: MultiAgentRunRequest) -> TaskResult:
+def run_multi_agent_task(
+    req: MultiAgentRunRequest,
+    user: AuthenticatedUser = Depends(require_role(UserRole.USER)),
+) -> TaskResult:
+    """Start a multi-agent task.  Requires at least USER role."""
     return MultiAgentService.start_task(instruction=req.instruction, sync=req.sync)
 
 
 @multi_agent_router.get("/{task_id}")
-def get_task_status(task_id: str) -> Dict[str, Any]:
+def get_task_status(
+    task_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    _require_multi_agent_owner(task_id, user)
     state = MultiAgentService.get_state(task_id)
     if not state:
         raise HTTPException(status_code=404, detail="Multi-agent task not found")
@@ -127,7 +162,11 @@ def get_task_status(task_id: str) -> Dict[str, Any]:
 
 
 @multi_agent_router.get("/{task_id}/subtasks")
-def get_task_subtasks(task_id: str) -> List[Dict[str, Any]]:
+def get_task_subtasks(
+    task_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    _require_multi_agent_owner(task_id, user)
     state = MultiAgentService.get_state(task_id)
     if not state:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -135,13 +174,21 @@ def get_task_subtasks(task_id: str) -> List[Dict[str, Any]]:
 
 
 @multi_agent_router.get("/{task_id}/messages")
-def get_task_messages(task_id: str) -> List[Dict[str, Any]]:
+def get_task_messages(
+    task_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    _require_multi_agent_owner(task_id, user)
     history = AgentMessageBus.get_history(task_id)
     return [m.model_dump() for m in history]
 
 
 @multi_agent_router.get("/{task_id}/report")
-def get_task_report(task_id: str) -> Dict[str, Any]:
+def get_task_report(
+    task_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    _require_multi_agent_owner(task_id, user)
     report = MultiAgentService.get_report(task_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not available")
@@ -149,5 +196,10 @@ def get_task_report(task_id: str) -> Dict[str, Any]:
 
 
 @multi_agent_router.post("/{task_id}/resolve", response_model=TaskResult)
-def resolve_approval(task_id: str, res: ApprovalResolution) -> TaskResult:
+def resolve_approval(
+    task_id: str,
+    res: ApprovalResolution,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> TaskResult:
+    _require_multi_agent_owner(task_id, user)
     return MultiAgentService.resume_approval(task_id=task_id, approved=res.approved)

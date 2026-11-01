@@ -23,19 +23,34 @@ class WorkspaceSecurityError(ValueError):
 
 class WorkspaceService:
     @staticmethod
-    def get_workspace_root() -> Path:
+    def get_workspace_root(task_id: str | None = None) -> Path:
+        if task_id:
+            try:
+                from backend.app.services.project_service import ProjectService
+                scope = ProjectService.task_scope(task_id)
+                ws = scope.get("workspace_path")
+                if ws:
+                    p = Path(ws).resolve()
+                    if not p.exists() or not p.is_dir():
+                        raise WorkspaceSecurityError(f"Task workspace directory does not exist or is invalid: {ws}")
+                    return p
+            except WorkspaceSecurityError:
+                raise
+            except Exception:
+                pass
+
         configured_root = Path(settings.WORKSPACE_ROOT).resolve()
         if not configured_root.exists():
             configured_root.mkdir(parents=True, exist_ok=True)
         return configured_root
 
     @staticmethod
-    def validate_path(requested_path: str, allow_sensitive: bool = False) -> Path:
+    def validate_path(requested_path: str, allow_sensitive: bool = False, task_id: str | None = None) -> Path:
         """
-        Validate that requested path is safely contained within WORKSPACE_ROOT
+        Validate that requested path is safely contained within the resolved workspace root
         and does not target sensitive files.
         """
-        root = WorkspaceService.get_workspace_root()
+        root = WorkspaceService.get_workspace_root(task_id=task_id)
         req_path_str = str(requested_path).strip()
 
         # Reject null bytes

@@ -117,7 +117,11 @@ class ProjectService:
             project, conversation = row
             if owner_id is not None and project.owner_id != owner_id:
                 raise HTTPException(404, "Task not found")
-            return {"project_id": project.project_id, "conversation_id": conversation.conversation_id}
+            return {
+                "project_id": project.project_id,
+                "conversation_id": conversation.conversation_id,
+                "workspace_path": project.workspace_path,
+            }
 
     @classmethod
     def tasks(cls, project_id, conversation_id, owner_id, limit=50, offset=0):

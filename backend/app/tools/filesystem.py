@@ -20,8 +20,10 @@ class FilesystemTool(BaseTool):
             return ToolResult(tool_name=self.metadata.name, success=False, error="Missing operation or path")
             
         try:
+            from backend.app.security.truth_isolation import RuntimeTruthIsolationGate
+            RuntimeTruthIsolationGate.check_access(path_str)
             target_path = WorkspaceService.validate_path(path_str)
-        except ValueError as e:
+        except (ValueError, PermissionError) as e:
             return ToolResult(tool_name=self.metadata.name, success=False, error=str(e))
             
         try:

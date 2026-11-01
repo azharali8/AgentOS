@@ -56,11 +56,14 @@ class TestingAgent:
 
         start_time = time.perf_counter()
         from backend.app.services.test_service import TestService
-        framework, _ = TestService.discover_test_framework()
+        from backend.app.services.workspace_service import WorkspaceService
+        task_ws = WorkspaceService.get_workspace_root(task_id=task_id)
+        framework, _ = TestService.discover_test_framework(workspace_root=task_ws)
         # Source files in a plan are context, not necessarily test targets.
         target_path = next((p for p in subtask.target_files if Path(p).name.startswith("test_") or Path(p).name.endswith("_test.py")), None)
 
         try:
+            self.runner._root = task_ws
             req_args: Dict[str, Any] = {"operation": "run", "framework": framework}
             if target_path:
                 req_args["path"] = target_path

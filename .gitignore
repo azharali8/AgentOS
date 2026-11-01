@@ -44,6 +44,8 @@ pytest_tmp/
 *.sqlite3
 *.test.db
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/*.sqlite
 data/*.sqlite3
 data/backups/
