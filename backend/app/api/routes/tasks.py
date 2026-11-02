@@ -22,21 +22,15 @@ class TaskEventResponse(BaseModel):
 
 
 def _require_task_owner(task_id: str, user: AuthenticatedUser) -> TaskResult:
-    """Resolve a task and enforce ownership.  Returns 404 for missing *or*
-    unauthorised tasks so that callers cannot distinguish the two cases.
+    """Resolve a task and enforce ownership, hiding unauthorized task IDs.
 
-    For project-linked tasks, ownership is checked via the project ownership
-    chain (ProjectService.task_scope).
-
-    Legacy tasks with no project affiliation are accessible only to ADMIN
-    users; regular users cannot access unscoped tasks regardless of whether
-    they know the task ID.
+    Project-linked tasks are authorized through ProjectService.task_scope.
+    Legacy unscoped tasks are available only to admins.
     """
     from backend.app.auth.service import UserRole
     scope = ProjectService.task_scope(task_id, user.user_id)
-    if not scope:
-        if user.role != UserRole.ADMIN:
-            raise HTTPException(status_code=404, detail="Task not found")
+    if not scope and user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=404, detail="Task not found")
     task = TaskService.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -49,15 +43,9 @@ def list_tasks(
     offset: int = Query(0, ge=0, description="Offset from start"),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """List tasks visible to the current user."""
+    """List project-linked tasks belonging to the authenticated user."""
     tasks = TaskService.list_tasks(limit=limit, offset=offset)
-    # Filter to tasks owned by this user (identified via project metadata).
-    # Legacy unattached tasks (no project_owner) are excluded to avoid leaking
-    # data created by other users before the ownership system was introduced.
-    return [
-        t for t in tasks
-        if (t.metadata or {}).get("project_owner") == user.user_id
-    ]
+    return [t for t in tasks if (t.metadata or {}).get("project_owner") == user.user_id]
 
 
 @router.get("/{task_id}", response_model=TaskResult)
@@ -70,7 +58,6 @@ def get_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user)):
 def cancel_task(task_id: str, user: AuthenticatedUser = Depends(get_current_user)):
     """Cancel a running, pending, or waiting task."""
     _require_task_owner(task_id, user)
-
     success = TaskService.cancel_task(task_id)
     if not success:
         task = TaskService.get_task(task_id)
@@ -90,5 +77,4 @@ def get_task_history(
 ):
     """Get the chronological append-only event timeline for a task."""
     _require_task_owner(task_id, user)
-    events = EventService.list_events(task_id, limit=limit, offset=offset)
-    return events
+    return EventService.list_events(task_id, limit=limit, offset=offset)
