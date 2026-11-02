@@ -16,6 +16,7 @@ class IntentType(str, Enum):
     """Supported Voice Agent intent categories."""
     CREATE_PROJECT = "create_project"          # Scaffold a new project from scratch
     CONNECT_PROJECT = "connect_project"        # Switch / connect to an existing project path
+    DISCONNECT_PROJECT = "disconnect_project"  # Return to the built-in workspace
     SWITCH_PROJECT = "switch_project"          # Switch active workspace to another project
     CREATE_TASK = "create_task"                # Submit an engineering task to Supervisor
     EXECUTE_TASK = "execute_task"              # Run / execute task immediately

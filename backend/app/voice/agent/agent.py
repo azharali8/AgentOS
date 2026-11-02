@@ -18,6 +18,7 @@ from backend.app.voice.agent.command_router import AgentOSCommandGateway
 from backend.app.voice.agent.confirmation import ConfirmationGate
 from backend.app.voice.agent.conversation import ConversationState
 from backend.app.voice.agent.intent import IntentType, VoiceIntent
+from backend.app.auth.service import AuthenticatedUser
 
 logger = logging.getLogger("agentos.voice.agent")
 
@@ -54,9 +55,11 @@ class VoiceAgent:
         transcript: str,
         user_id: Optional[str] = None,
         user_role: Optional[str] = None,
+        principal: Optional[AuthenticatedUser] = None,
     ) -> VoiceAgentResult:
         """Process a voice transcript end-to-end."""
         self.user_role = user_role
+        self.principal = principal
         transcript = transcript.strip()
         if not transcript:
             return VoiceAgentResult(
@@ -116,6 +119,10 @@ class VoiceAgent:
                 project_name=proj_name,
                 confidence=0.95,
             )
+
+        if any(t in lower for t in ("disconnect project", "disconnect workspace", "disconnect the project", "disconnect the current project", "close current project")):
+            return VoiceIntent(intent_type=IntentType.DISCONNECT_PROJECT, transcript=transcript,
+                               instruction=transcript, confidence=0.95)
 
         # --- RUN TESTS ---
         run_test_triggers = [
@@ -260,7 +267,13 @@ class VoiceAgent:
                     name=intent.project_name,
                     location=str(parent),
                     instruction=intent.instruction or intent.transcript,
+                    principal=getattr(self, "principal", None),
                 )
+                if result.get("status") in {"denied", "error"}:
+                    return VoiceAgentResult(
+                        tts_summary=result["tts_message"], intent_type=intent.intent_type,
+                        status=result["status"],
+                    )
                 self.conversation.active_project_path = result.get("path")
                 task_res = self.gateway.create_task(
                     instruction=intent.instruction or intent.transcript,
@@ -286,6 +299,11 @@ class VoiceAgent:
                     tts_summary=f"I couldn't create the project: {exc}. Please choose another name or location.",
                     intent_type=intent.intent_type, status="failed",
                 )
+
+        elif intent.intent_type == IntentType.DISCONNECT_PROJECT:
+            result = self.gateway.disconnect_project(principal=getattr(self, "principal", None))
+            return VoiceAgentResult(tts_summary=result["tts_message"], intent_type=intent.intent_type,
+                                    status=result["status"], project_path=result.get("path"))
 
         elif intent.intent_type == IntentType.RUN_TESTS:
             res = self.gateway.run_tests()

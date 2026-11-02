@@ -104,6 +104,7 @@ async def execute_voice_command(
             auto_start=auto_start,
             sync=sync,
             user_role=user.role.value,
+            principal=user,
         )
     except InvalidAudioError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -126,7 +127,7 @@ async def execute_text_command(
     """Process a typed voice-style command directly through the VoiceAgent."""
     try:
         return VoiceService.process_transcript(req.command, user_id=user.user_id,
-                                               session_id=req.session_id, user_role=user.role.value)
+                                               session_id=req.session_id, user_role=user.role.value, principal=user)
     except Exception as exc:
         logger.error("Text command processing error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Command processing failed: {str(exc)}")

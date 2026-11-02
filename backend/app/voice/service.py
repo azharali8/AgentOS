@@ -180,6 +180,7 @@ class VoiceService:
         auto_start: bool = True,
         sync: bool = False,
         user_role: Optional[str] = None,
+        principal=None,
     ) -> VoiceExecuteResponse:
         """
         Voice Execution Workflow:
@@ -210,14 +211,14 @@ class VoiceService:
         return cls.process_transcript(
             transcript_text, user_id=user_id, session_id=session_id,
             auto_start=auto_start, sync=sync, provider=transcription.provider,
-            confidence=transcription.confidence, user_role=user_role,
+            confidence=transcription.confidence, user_role=user_role, principal=principal,
         )
 
     @classmethod
     def process_transcript(cls, transcript: str, user_id: Optional[str] = None,
                            session_id: str = "default-session", auto_start: bool = True,
                            sync: bool = False, provider: str = "text",
-                           confidence: Optional[float] = 1.0, user_role: Optional[str] = None) -> VoiceExecuteResponse:
+                           confidence: Optional[float] = 1.0, user_role: Optional[str] = None, principal=None) -> VoiceExecuteResponse:
         # Uncertain recognition must not consume a pending confirmation or name.
         if confidence is not None and confidence < 0.65:
             return VoiceExecuteResponse(
@@ -230,7 +231,7 @@ class VoiceService:
         with cls._conversation_lock:
             conv = cls.get_conversation_state(session_id, user_id)
             agent = VoiceAgent(conversation=conv, live_mode=provider == "assemblyai-streaming")
-            result = agent.process(transcript=transcript, user_id=user_id, user_role=user_role)
+            result = agent.process(transcript=transcript, user_id=user_id, user_role=user_role, principal=principal)
         task_id = result.task_id
         if task_id and result.status in ("created", "planning"):
             # Match typed task selection before starting the Supervisor; never mutate global settings.

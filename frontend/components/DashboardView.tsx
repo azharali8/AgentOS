@@ -465,12 +465,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     setPendingInstruction(textToSubmit);
     setComposerError('');
     try {
-      if(!projectId)throw new Error('Connect or select a project before sending a command.');
-      const task = await client.createTask(textToSubmit, 1, { attachments, project_id:projectId, conversation_id:conversationId||undefined });
+      const task = await client.createTask(textToSubmit, 1, {
+        attachments,
+        ...(projectId ? { project_id: projectId, conversation_id: conversationId || undefined } : {}),
+      });
       if (projectEpoch.current !== epoch) return;
-      setConversationId(task.metadata?.conversation_id||null);
+      setConversationId(projectId ? (task.metadata?.conversation_id || null) : null);
       setTasks(prev=>[...prev,task]);
-      client.conversations(projectId).then(records=>{if(projectEpoch.current===epoch)setConversations(records);}).catch(()=>{if(projectEpoch.current===epoch)setProjectError('Could not refresh conversations');});
+      if (projectId) {
+        client.conversations(projectId).then(records=>{if(projectEpoch.current===epoch)setConversations(records);}).catch(()=>{if(projectEpoch.current===epoch)setProjectError('Could not refresh conversations');});
+      }
       setInputText('');
       setAttachments([]);
       if(activeTask)setPreviousTurns(prev=>[...prev,{task:activeTask,events:streamEvents,artifacts:taskArtifacts}]);
@@ -1033,10 +1037,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 )}
                 <button
                   type="button"
-                  disabled={!inputText.trim() || isSubmitting || isAttaching || preferences.busy || projectBusy || !projectId}
+                  disabled={!inputText.trim() || isSubmitting || isAttaching || preferences.busy || projectBusy}
                   onClick={() => handleSubmitTask()}
                   className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-30 disabled:hover:bg-indigo-600 text-white flex items-center justify-center transition-all shadow-md shrink-0"
-                  title={!projectId ? 'Connect a project before sending' : 'Send'}
+                  title="Send"
                   aria-label="Send"
                 >
                   {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" />}

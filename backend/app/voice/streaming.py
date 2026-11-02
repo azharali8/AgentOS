@@ -180,7 +180,7 @@ async def relay(browser: WebSocket, provider, user, session_id: str, token: str 
             try:
                 result = await asyncio.to_thread(VoiceService.process_transcript, text,
                     user_id=current_user.user_id, user_role=current_user.role.value, session_id=session_id,
-                    provider="assemblyai-streaming", confidence=None, sync=False)
+                    provider="assemblyai-streaming", confidence=None, sync=False, principal=current_user)
                 payload = result.model_dump()
             except Exception:
                 import logging

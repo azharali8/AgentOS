@@ -196,7 +196,7 @@ def test_create_project_writes_base_files(tmp_path):
     assert "A CLI tool" in readme_content
 
 
-def test_create_project_updates_workspace_root(tmp_path):
+def test_create_project_does_not_bypass_workspace_transition(tmp_path):
     parent = _make_parent(tmp_path)  # real directory exists
 
     from backend.app.config.settings import PROJECT_ROOT as real_root
@@ -216,7 +216,7 @@ def test_create_project_updates_workspace_root(tmp_path):
                     initialize_git=False,
                 )
             target = parent / "RootSwitchApp"
-            assert mock_settings.WORKSPACE_ROOT == str(target)
+            assert mock_settings.WORKSPACE_ROOT == ""
         finally:
             pc_module.settings = original_settings
 

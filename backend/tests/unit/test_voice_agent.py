@@ -15,6 +15,7 @@ from backend.app.voice.agent.confirmation import ConfirmationGate
 from backend.app.voice.agent.conversation import ConversationState
 from backend.app.voice.agent.intent import IntentType, VoiceIntent
 from backend.app.models.task import TaskStatus
+from backend.app.auth.service import AuthenticatedUser, UserRole
 
 
 class TestVoiceIntentAndConfirmation:
@@ -84,6 +85,36 @@ class TestVoiceAgentCommandUnderstanding:
 
 
 class TestVoiceAgentEndToEndJourneys:
+    def test_voice_connect_requires_verified_developer_principal(self, tmp_path, monkeypatch):
+        project = tmp_path / "project"
+        project.mkdir()
+        calls = []
+        monkeypatch.setattr("backend.app.api.routes.v1.set_workspace_root",
+                            lambda req, user: calls.append((req.path, user)) or {"path": req.path})
+        assert AgentOSCommandGateway.connect_project(str(project))["status"] == "denied"
+        viewer = AuthenticatedUser(user_id="viewer", username="viewer", role=UserRole.VIEWER)
+        assert AgentOSCommandGateway.connect_project(str(project), viewer)["status"] == "denied"
+        developer = AuthenticatedUser(user_id="developer", username="developer", role=UserRole.DEVELOPER)
+        result = AgentOSCommandGateway.connect_project(str(project), developer)
+        assert result["status"] == "connected"
+        assert calls == [(str(project), developer)]
+
+    def test_voice_disconnect_requires_verified_developer_principal(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr("backend.app.api.routes.v1.disconnect_workspace_v1",
+                            lambda user: calls.append(user) or {"path": "C:/default/workspace"})
+        assert AgentOSCommandGateway.disconnect_project()["status"] == "denied"
+        viewer = AuthenticatedUser(user_id="viewer", username="viewer", role=UserRole.VIEWER)
+        assert AgentOSCommandGateway.disconnect_project(viewer)["status"] == "denied"
+        developer = AuthenticatedUser(user_id="developer", username="developer", role=UserRole.DEVELOPER)
+        result = AgentOSCommandGateway.disconnect_project(developer)
+        assert result["status"] == "disconnected"
+        assert result["path"] == "C:/default/workspace"
+        assert calls == [developer]
+
+    def test_disconnect_intent_is_classified(self):
+        assert VoiceAgent()._classify_intent("Disconnect the current project").intent_type == IntentType.DISCONNECT_PROJECT
+
     def test_journey_create_project_with_confirmation_gate(self):
         conv = ConversationState()
         agent = VoiceAgent(conversation=conv)
@@ -110,8 +141,11 @@ class TestVoiceAgentEndToEndJourneys:
 
         # 2. User provides name
         res2 = agent.process("FreshApp")
-        assert res2.project_created is True
-        assert "FreshApp" in res2.tts_summary or "created" in res2.tts_summary.lower()
+        # A clarification reply retains no authenticated principal when this
+        # unit test invokes the agent directly, so workspace mutation fails
+        # closed rather than creating/selecting a project.
+        assert res2.status == "denied"
+        assert res2.project_created is False
 
     def test_journey_run_tests_command(self):
         agent = VoiceAgent()

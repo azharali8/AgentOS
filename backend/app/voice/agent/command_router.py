@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.app.config.settings import PROJECT_ROOT, settings
+from backend.app.auth.service import AuthenticatedUser, UserRole
 from backend.app.models.task import TaskRequest, TaskStatus
 from backend.app.services.task_service import TaskService
 from backend.app.services.workspace_service import WorkspaceService
@@ -123,16 +124,19 @@ class AgentOSCommandGateway:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def create_project(name: str, location: str, instruction: str) -> Dict[str, Any]:
+    def create_project(name: str, location: str, instruction: str, principal: Optional[AuthenticatedUser] = None) -> Dict[str, Any]:
         """Create a new project directory and switch WORKSPACE_ROOT."""
         from backend.app.services.project_creator import ProjectCreatorService
+        from backend.app.api.routes.v1 import WorkspaceSetRootRequest, set_workspace_root
+        if principal is None or principal.role not in (UserRole.DEVELOPER, UserRole.ADMIN):
+            return {"status": "denied", "tts_message": "You do not have permission to change the workspace."}
 
         logger.info("CommandGateway: creating project '%s' at %s", name, location)
-        meta = ProjectCreatorService.create_project(
-            name=name,
-            location=location,
-            instruction=instruction,
-        )
+        # Filesystem creation has no workspace side effect.  The authenticated
+        # shared transition below performs validation, registration and state
+        # updates exactly as the HTTP API does.
+        meta = ProjectCreatorService.create_project(name=name, location=location, instruction=instruction)
+        set_workspace_root(WorkspaceSetRootRequest(path=meta["path"], name=name), principal)
         return {
             "project_name": meta["project_name"],
             "path": meta["path"],
@@ -141,23 +145,36 @@ class AgentOSCommandGateway:
         }
 
     @staticmethod
-    def connect_project(project_path: str) -> Dict[str, Any]:
+    def connect_project(project_path: str, principal: Optional[AuthenticatedUser] = None) -> Dict[str, Any]:
         """Switch active WORKSPACE_ROOT to an existing project directory."""
-        target = Path(project_path).resolve()
-        if not target.exists() or not target.is_dir():
-            return {
-                "status": "error",
-                "tts_message": f"Project directory does not exist: {project_path}",
-            }
-
-        settings.WORKSPACE_ROOT = str(target)
-        import os
-        os.environ["WORKSPACE_ROOT"] = str(target)
+        from backend.app.api.routes.v1 import WorkspaceSetRootRequest, set_workspace_root
+        if principal is None or principal.role not in (UserRole.DEVELOPER, UserRole.ADMIN):
+            return {"status": "denied", "tts_message": "You do not have permission to change the workspace."}
+        try:
+            result = set_workspace_root(WorkspaceSetRootRequest(path=project_path), principal)
+        except Exception as exc:
+            return {"status": "error", "tts_message": str(getattr(exc, "detail", exc))}
+        target = Path(result["path"])
 
         return {
             "status": "connected",
             "path": str(target),
             "tts_message": f"Connected to project at {target.name}. Active workspace updated.",
+        }
+
+    @staticmethod
+    def disconnect_project(principal: Optional[AuthenticatedUser] = None) -> Dict[str, Any]:
+        """Disconnect through the same authenticated transition as HTTP."""
+        from backend.app.api.routes.v1 import disconnect_workspace_v1
+        if principal is None or principal.role not in (UserRole.DEVELOPER, UserRole.ADMIN):
+            return {"status": "denied", "tts_message": "You do not have permission to change the workspace."}
+        try:
+            result = disconnect_workspace_v1(principal)
+        except Exception as exc:
+            return {"status": "error", "tts_message": str(getattr(exc, "detail", exc))}
+        return {
+            "status": "disconnected", "path": result["path"],
+            "tts_message": "Project disconnected. AgentOS is using its default workspace.",
         }
 
     @staticmethod

@@ -13,6 +13,35 @@ from backend.app.db.models import ProjectModel, ConversationModel, ConversationT
 
 
 class ProjectService:
+    @classmethod
+    def workspace_selection_snapshot(cls, owner_id):
+        """Capture the small persistent state changed by ``register`` for compensation."""
+        with get_db_session() as db:
+            preference = db.get(WorkspacePreferenceModel, f"project:{owner_id}")
+            return dict(existed=preference is not None, value=dict(preference.value or {}) if preference else None)
+
+    @classmethod
+    def restore_workspace_selection(cls, owner_id, snapshot, project_id=None):
+        """Best-effort compensation after filesystem persistence fails.
+
+        This cannot make DB and filesystem one transaction; it restores the
+        previous preference and removes only a newly-created, unreferenced
+        project row.
+        """
+        with get_db_session() as db:
+            key = f"project:{owner_id}"
+            preference = db.get(WorkspacePreferenceModel, key)
+            if snapshot["existed"]:
+                if preference is None:
+                    db.add(WorkspacePreferenceModel(key=key, value=snapshot["value"] or {}))
+                else:
+                    preference.value = snapshot["value"] or {}
+            elif preference is not None:
+                db.delete(preference)
+            if project_id:
+                project = db.get(ProjectModel, project_id)
+                if project and not db.query(ConversationModel).filter_by(project_id=project_id).first():
+                    db.delete(project)
     @staticmethod
     def _owned(db, project_id, owner_id):
         project = db.get(ProjectModel, project_id)

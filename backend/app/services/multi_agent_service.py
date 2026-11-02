@@ -162,6 +162,13 @@ class MultiAgentService:
             TaskService.update_task_status(task_id, TaskStatus(status))
         else:
             TaskService.set_error(task_id, state.get("error") or state.get("final_response") or "Supervisor execution failed")
+        # Reservations protect only workspace-dependent live/checkpointed work.
+        # Terminal outcomes must release explicitly; WAITING_APPROVAL/PAUSED are
+        # deliberately retained by the blocker state checks.
+        current = TaskService.get_task(task_id)
+        if current and current.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+            from backend.app.services.workspace_transition import release_workspace_task
+            release_workspace_task(task_id)
 
     @staticmethod
     def get_state(task_id: str) -> Optional[MultiAgentState]:

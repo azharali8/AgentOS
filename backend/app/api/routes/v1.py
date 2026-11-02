@@ -38,7 +38,12 @@ from backend.app.security.sensitive_files import is_sensitive_path
 
 from backend.app.services.multi_agent_service import MultiAgentService
 from backend.app.services.workspace_service import WorkspaceService
-from backend.app.services.workspace_transition import workspace_transition
+from backend.app.services.workspace_transition import (
+    admit_workspace_task,
+    release_workspace_task,
+    require_idle_workspace,
+    workspace_transition,
+)
 from backend.app.models.approval import ApprovalRequest, ApprovalResponse, ApprovalStatus
 from backend.app.config.settings import settings
 
@@ -246,19 +251,33 @@ def create_task(req: TaskCreateRequestV1, user: AuthenticatedUser = Depends(requ
     if req.auto_start:
         import threading
         from backend.app.services.multi_agent_service import MultiAgentService
+        # Admission happens while this route holds workspace_transition_lock.
+        # A concurrent root change will now see the reservation before the
+        # worker is made runnable.
+        admit_workspace_task(task_record.task_id)
         def _execute_bg():
             try:
                 # Use MultiAgentService with existing task ID
                 TaskService.update_task_status(task_record.task_id, TaskStatus.PLANNING)
                 graph = MultiAgentService.start_task(instruction=req.task, sync=True, task_id=task_record.task_id)
             except Exception as e:
-                TaskService.set_error(task_record.task_id, str(e))
+                try:
+                    TaskService.set_error(task_record.task_id, str(e))
+                finally:
+                    release_workspace_task(task_record.task_id)
 
         if req.sync:
             _execute_bg()
             task_record = TaskService.get_task(task_record.task_id) or task_record
         else:
-            threading.Thread(target=_execute_bg, daemon=True, name=f"task-exec-{task_record.task_id[:8]}").start()
+            try:
+                threading.Thread(target=_execute_bg, daemon=True, name=f"task-exec-{task_record.task_id[:8]}").start()
+            except Exception as exc:
+                try:
+                    TaskService.set_error(task_record.task_id, str(exc))
+                finally:
+                    release_workspace_task(task_record.task_id)
+                raise HTTPException(500, "Could not start task worker.") from exc
     
     return TaskResponseV1(
         task_id=task_record.task_id,
@@ -1052,8 +1071,6 @@ def set_workspace_root(
     import os
     from pathlib import Path
 
-    _require_idle_workspace()
-
     raw = req.path.strip()
 
     # Reject null bytes and UNC paths
@@ -1079,21 +1096,31 @@ def set_workspace_root(
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"Path is not a directory: {target}")
 
-    # Prevent pointing at the AgentOS installation directory
+    # Prevent pointing at the AgentOS installation directory.  The built-in
+    # ``workspace`` directory is the one deliberate exception: disconnect
+    # already selects it and it is a sandboxed, application-owned workspace.
     from backend.app.config.settings import PROJECT_ROOT
     agentos_root = Path(PROJECT_ROOT).resolve()
     try:
         target.relative_to(agentos_root)
-        # If we get here, target is inside agentos_root â€” reject it
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Cannot use the AgentOS installation directory as the workspace root. "
-                "Please choose an external project directory."
-            ),
-        )
+        if target != (agentos_root / "workspace").resolve():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cannot use the AgentOS installation directory as the workspace root. "
+                    "Please choose an external project directory."
+                ),
+            )
     except ValueError:
         pass  # Good â€” target is outside agentos_root
+
+    # Selecting the current canonical root cannot move the shared workspace.
+    # Keep this idempotent operation available while a task is awaiting human
+    # approval; the active-work guard remains mandatory for every real change.
+    current_root = Path(settings.WORKSPACE_ROOT).resolve()
+    is_current_root = target == current_root
+    if not is_current_root:
+        _require_idle_workspace()
 
     # Count files for the response (non-recursive, top-level only)
     try:
@@ -1103,13 +1130,16 @@ def set_workspace_root(
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied reading directory contents.")
 
-    # Update WORKSPACE_ROOT in the running process
-    settings.WORKSPACE_ROOT = str(target)
-    os.environ["WORKSPACE_ROOT"] = str(target)
+    # Register before changing process state.  A registration failure must not
+    # leave the engine pointed at a workspace that the project layer rejected.
+    display_name = req.name.strip() or target.name
+    from backend.app.services.project_service import ProjectService
+    selection_snapshot = ProjectService.workspace_selection_snapshot(user.user_id)
+    project = ProjectService.register(str(target), display_name, user.user_id)
 
     # Persist to .env file for across-restart durability (skipped during pytest)
     persisted = False
-    if "PYTEST_CURRENT_TEST" not in os.environ and getattr(settings, "APP_ENV", "") != "test":
+    if not is_current_root and "PYTEST_CURRENT_TEST" not in os.environ and getattr(settings, "APP_ENV", "") != "test":
         env_path = agentos_root / ".env"
         try:
             if env_path.exists():
@@ -1122,19 +1152,33 @@ def set_workspace_root(
                         break
                 if not updated:
                     lines.append(f"WORKSPACE_ROOT={target}\n")
-                env_path.write_text("".join(lines), encoding="utf-8")
+                replacement = "".join(lines)
             else:
-                env_path.write_text(f"WORKSPACE_ROOT={target}\n", encoding="utf-8")
+                replacement = f"WORKSPACE_ROOT={target}\n"
+            temporary = env_path.with_suffix(env_path.suffix + ".workspace-transition")
+            temporary.write_text(replacement, encoding="utf-8")
+            os.replace(temporary, env_path)
             persisted = True
         except Exception as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except Exception:
+                pass
             import logging
             logging.getLogger("agentos.workspace").warning(
                 "Could not persist WORKSPACE_ROOT to .env: %s", exc
             )
+            ProjectService.restore_workspace_selection(
+                user.user_id, selection_snapshot, project.get("project_id"),
+            )
+            raise HTTPException(500, "Could not persist workspace configuration; workspace was not changed.")
 
-    display_name = req.name.strip() or target.name
-    from backend.app.services.project_service import ProjectService
-    project = ProjectService.register(str(target), display_name, user.user_id)
+    # Commit the process-visible root last, after validation, registration and
+    # persistence have all succeeded.  The idempotent case deliberately leaves
+    # process state untouched.
+    if not is_current_root:
+        settings.WORKSPACE_ROOT = str(target)
+        os.environ["WORKSPACE_ROOT"] = str(target)
 
     return {
         "status": "ok",
@@ -1148,14 +1192,8 @@ def set_workspace_root(
 
 
 def _require_idle_workspace():
-    from backend.app.db.database import get_db_session
-    from backend.app.db.models import TaskModel
-    with get_db_session() as db:
-        active = db.query(TaskModel.task_id).filter(TaskModel.status.notin_(
-            [TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value]
-        )).first()
-    if active:
-        raise HTTPException(409, "Finish or cancel active tasks and pending approvals before changing projects.")
+    """Compatibility wrapper retained for existing route/tests imports."""
+    require_idle_workspace()
 
 
 @workspace_v1.post("/disconnect")
@@ -1286,8 +1324,12 @@ def create_project_v1(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(exc)}")
 
-    from backend.app.services.project_service import ProjectService
-    project = ProjectService.register(project_meta['path'], req.name, user.user_id)
+    # Creation deliberately does not mutate WORKSPACE_ROOT.  Reuse the same
+    # validated transition used by an existing-project connection.
+    connected = set_workspace_root(
+        WorkspaceSetRootRequest(path=project_meta['path'], name=req.name), user,
+    )
+    project = connected['project']
     task_id = None
     if req.instruction and req.instruction.strip() and req.auto_start_task:
         from backend.app.models.task import TaskRequest
@@ -1306,6 +1348,10 @@ def create_project_v1(
             record = db.get(TaskModel, task_id)
             record.task_metadata = {**record.task_metadata, 'model_selection': model_preference(user.user_id), 'model_owner': user.user_id}
 
+        # The surrounding route owns workspace_transition_lock.  Reserve the
+        # shared root before launching the auto-start worker.
+        admit_workspace_task(task_id)
+
         EventService.record_event(
             task_id=task_id,
             event_type="PROJECT_CREATED",
@@ -1321,13 +1367,19 @@ def create_project_v1(
                 TaskService.update_task_status(task_record.task_id, TaskStatus.PLANNING)
                 MultiAgentService.start_task(instruction=req.instruction.strip(), sync=True, task_id=task_id)
             except Exception as exc:
-                TaskService.set_error(task_record.task_id, str(exc))
+                try:
+                    TaskService.set_error(task_record.task_id, str(exc))
+                finally:
+                    release_workspace_task(task_id)
 
-        threading.Thread(
-            target=_bg_execute,
-            daemon=True,
-            name=f"proj-exec-{task_id[:8]}",
-        ).start()
+        try:
+            threading.Thread(target=_bg_execute, daemon=True, name=f"proj-exec-{task_id[:8]}").start()
+        except Exception as exc:
+            try:
+                TaskService.set_error(task_id, str(exc))
+            finally:
+                release_workspace_task(task_id)
+            raise HTTPException(500, "Could not start project task worker.") from exc
 
     return {
         "status": "ok",

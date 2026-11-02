@@ -7,7 +7,7 @@ Provides safe, bounded initialization of new software projects from scratch:
 - Detects existing directory conflicts to prevent data loss
 - Creates project directory and basic skeleton files (README.md, .gitignore)
 - Initializes Git safely if requested
-- Dynamically updates active WORKSPACE_ROOT and persists to .env
+- Leaves workspace activation to the validated workspace-transition service
 """
 
 from __future__ import annotations
@@ -130,8 +130,9 @@ class ProjectCreatorService:
         initialize_git: bool = True,
     ) -> Dict[str, Any]:
         """
-        Creates the project directory on disk, initializes base files and Git,
-        updates the active WORKSPACE_ROOT, and returns created project metadata.
+        Creates the project directory, base files and Git metadata.  Workspace
+        activation is intentionally performed by the caller through the shared
+        transition service so creation cannot bypass admission and rollback.
         """
         parent_dir, target_dir = cls.validate_project_request(name, location)
 
@@ -177,32 +178,6 @@ class ProjectCreatorService:
                     git_initialized = True
             except Exception as exc:
                 logger.warning("Git initialization skipped or failed: %s", exc)
-
-        # 4. Update active WORKSPACE_ROOT dynamically in running process and .env
-        settings.WORKSPACE_ROOT = str(target_dir)
-        os.environ["WORKSPACE_ROOT"] = str(target_dir)
-
-        # Persist to .env only if not running in pytest/test mode to avoid breaking test suites
-        if "PYTEST_CURRENT_TEST" not in os.environ and getattr(settings, "APP_ENV", "") != "test":
-            agentos_root = Path(PROJECT_ROOT).resolve()
-            env_path = agentos_root / ".env"
-            try:
-                if env_path.exists():
-                    lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
-                    updated = False
-                    for i, line in enumerate(lines):
-                        if line.startswith("WORKSPACE_ROOT="):
-                            lines[i] = f"WORKSPACE_ROOT={target_dir}\n"
-                            updated = True
-                            break
-                    if not updated:
-                        lines.append(f"WORKSPACE_ROOT={target_dir}\n")
-                    env_path.write_text("".join(lines), encoding="utf-8")
-                else:
-                    env_path.write_text(f"WORKSPACE_ROOT={target_dir}\n", encoding="utf-8")
-            except Exception as exc:
-                logger.warning("Could not persist WORKSPACE_ROOT to .env: %s", exc)
-
 
         return {
             "status": "ok",
