@@ -74,6 +74,15 @@ def reset_workspace_root_setting():
 
 
 @pytest.fixture(autouse=True)
+def reset_admitted_task_ids():
+    """Clear process-global workspace admission state between tests to prevent leakage."""
+    from backend.app.services.workspace_transition import _admitted_task_ids
+    _admitted_task_ids.clear()
+    yield
+    _admitted_task_ids.clear()
+
+
+@pytest.fixture(autouse=True)
 def enforce_mock_voice_provider():
     """Guarantee AssemblyAI credits are protected during automated test execution."""
     from backend.app.voice.service import VoiceService
