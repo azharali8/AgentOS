@@ -317,7 +317,8 @@ class TestMultiAgentEndpointsAuth:
         try:
             client = _client_as(user_a)
             fn = getattr(client, method)
-            resp = fn(endpoint_path)
+            kwargs = {"json": {"approved": True}} if method.lower() == "post" else {}
+            resp = fn(endpoint_path, **kwargs)
             assert resp.status_code == 404, (
                 f"Expected 404 for cross-user access to {endpoint_path}, "
                 f"got {resp.status_code}: {resp.text}"
@@ -356,8 +357,9 @@ class TestMultiAgentEndpointsAuth:
         )
 
     # Multi-agent task — unauthenticated state access is rejected
-    def test_multi_agent_status_requires_auth(self, two_users_with_tasks):
+    def test_multi_agent_status_requires_auth(self, two_users_with_tasks, monkeypatch):
         ctx = two_users_with_tasks
+        monkeypatch.setattr(settings, "AUTH_ENABLED", True)
         previous = dict(app.dependency_overrides)
         try:
             app.dependency_overrides.pop(get_current_user, None)

@@ -198,8 +198,9 @@ def get_task_report(
 @multi_agent_router.post("/{task_id}/resolve", response_model=TaskResult)
 def resolve_approval(
     task_id: str,
-    res: ApprovalResolution,
+    res: Optional[ApprovalResolution] = None,
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> TaskResult:
     _require_multi_agent_owner(task_id, user)
-    return MultiAgentService.resume_approval(task_id=task_id, approved=res.approved)
+    approved = res.approved if res is not None else True
+    return MultiAgentService.resume_approval(task_id=task_id, approved=approved)
