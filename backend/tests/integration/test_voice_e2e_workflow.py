@@ -30,19 +30,27 @@ from backend.app.main import app
 from backend.app.models.task import TaskStatus
 from backend.app.services.task_service import TaskService
 from backend.app.services.workspace_service import WorkspaceService
+from backend.app.voice.agent.agent import VoiceAgent
 from backend.app.voice.providers.mock import MockSpeechToTextProvider
 from backend.app.voice.service import VoiceService
 
 
 @pytest.mark.asyncio
-async def test_voice_driven_engineering_e2e(tmp_path: Path):
+async def test_voice_driven_engineering_e2e(tmp_path: Path, monkeypatch):
+    import backend.app.config.settings as config_mod
+
+    # Setup fake install root so tmp_path external workspace is not rejected by security checks
+    fake_install = tmp_path / "fake_install"
+    fake_install.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config_mod, "PROJECT_ROOT", fake_install)
+
     # 1. Setup isolated real workspace directory
     test_workspace = tmp_path / "url_shortener_project"
     test_workspace.mkdir(parents=True, exist_ok=True)
 
     # Point settings.WORKSPACE_ROOT to isolated workspace
-    old_workspace = settings.WORKSPACE_ROOT
-    settings.WORKSPACE_ROOT = str(test_workspace)
+    monkeypatch.setattr(settings, "WORKSPACE_ROOT", str(test_workspace))
+    monkeypatch.setattr(VoiceAgent, "_resolve_project_parent", staticmethod(lambda: test_workspace))
 
     try:
         # 2. Configure mock speech provider with the canonical hackathon command
@@ -152,6 +160,4 @@ async def test_voice_driven_engineering_e2e(tmp_path: Path):
         assert tts_res.provider == "browser"
 
     finally:
-        # Restore workspace root
-        settings.WORKSPACE_ROOT = old_workspace
         VoiceService.set_stt_provider(None)

@@ -93,6 +93,12 @@ def _client_as(user: AuthenticatedUser) -> TestClient:
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def enable_auth_for_legacy_auth_tests(monkeypatch):
+    """Ensure real authentication enforcement is active during legacy auth tests."""
+    monkeypatch.setattr(settings, "AUTH_ENABLED", True)
+
+
 class TestLegacyTaskEndpointsAuth:
     """Tests covering /api/tasks/* endpoints."""
 

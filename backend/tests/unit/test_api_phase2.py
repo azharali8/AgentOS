@@ -5,6 +5,7 @@ AgentOS Phase 2 — API Unit & Integration Tests
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.app.auth.service import AuthenticatedUser, UserRole, get_current_user
 from backend.app.db.database import get_db_session
 from backend.app.db.models import TaskModel, ApprovalModel, ExecutionModel, EventModel
 from backend.app.main import app
@@ -13,6 +14,23 @@ from backend.app.services.task_service import TaskService
 
 
 client = TestClient(app)
+
+TEST_USER_ID = "u-admin-phase2"
+
+
+@pytest.fixture(autouse=True)
+def admin_user_override():
+    admin = AuthenticatedUser(user_id=TEST_USER_ID, username="admin_phase2", role=UserRole.ADMIN)
+    had_previous = get_current_user in app.dependency_overrides
+    previous_override = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_current_user] = lambda: admin
+    try:
+        yield
+    finally:
+        if had_previous:
+            app.dependency_overrides[get_current_user] = previous_override
+        else:
+            app.dependency_overrides.pop(get_current_user, None)
 
 
 @pytest.fixture(autouse=True)
@@ -55,9 +73,12 @@ def test_metrics_endpoint():
 
 
 def test_list_tasks_pagination():
-    # Create 5 tasks
+    # Create 5 tasks with project_owner metadata matching the authenticated user
     for i in range(5):
-        TaskService.create_task(TaskRequest(instruction=f"Pagination task {i}"))
+        t = TaskService.create_task(TaskRequest(instruction=f"Pagination task {i}"))
+        with get_db_session() as session:
+            task_row = session.get(TaskModel, t.task_id)
+            task_row.task_metadata = {"project_owner": TEST_USER_ID}
 
     # Limit 2 offset 0
     resp1 = client.get("/api/tasks?limit=2&offset=0")

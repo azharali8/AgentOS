@@ -1,5 +1,6 @@
 """Real API/database/gateway integration; explicit graph/STT doubles, never a live mic demo."""
 import os
+from pathlib import Path
 import subprocess
 import sys
 import uuid
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.app.auth.service import AuthenticatedUser, UserRole
 from backend.app.config.settings import PROJECT_ROOT, settings
 from backend.app.main import app
 from backend.app.models.task import TaskRequest, TaskStatus
@@ -66,18 +68,38 @@ def test_non_success_never_marked_completed(graph, status):
     graph.status = status
     task = MultiAgentService.start_task("Inspect repository", sync=True)
     assert task.status.value == status
+    if status == "WAITING_APPROVAL":
+        # Mark as FAILED or CANCELLED so it does not block subsequent workspace transitions
+        TaskService.update_task_status(task.task_id, TaskStatus.CANCELLED)
 
 
-def test_project_clarification_keeps_instruction(graph, tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "WORKSPACE_ROOT", str(tmp_path))
-    monkeypatch.setattr(VoiceAgent, "_resolve_project_parent", staticmethod(lambda: tmp_path))
+def test_project_clarification_keeps_instruction(graph, monkeypatch, tmp_path):
+    import shutil
+    import backend.app.config.settings as config_mod
+
+    # Use tmp_path fixture. To satisfy the security checks in WorkspaceService
+    # and ProjectCreatorService, we designate a fake AgentOS installation root
+    # inside tmp_path, keeping the test project directory outside that fake root.
+    fake_install = tmp_path / "fake_install"
+    fake_install.mkdir(parents=True, exist_ok=True)
+    ext_dir = tmp_path / "external_workspace"
+    ext_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(config_mod, "PROJECT_ROOT", fake_install)
+    monkeypatch.setattr(settings, "WORKSPACE_ROOT", str(ext_dir))
+    monkeypatch.setattr(VoiceAgent, "_resolve_project_parent", staticmethod(lambda: ext_dir))
+    dev_user = AuthenticatedUser(user_id="dev-voice", username="dev_voice", role=UserRole.DEVELOPER)
     session = uuid.uuid4().hex
-    first = VoiceService.process_transcript("Create a new project", session_id=session, sync=True)
+    first = VoiceService.process_transcript(
+        "Create a new project", session_id=session, sync=True, user_role=dev_user.role.value, principal=dev_user
+    )
     assert first.status == "needs_clarification"
     assert not graph.calls
-    reply = VoiceService.process_transcript("URL Shortener", session_id=session, sync=True)
+    reply = VoiceService.process_transcript(
+        "URL Shortener", session_id=session, sync=True, user_role=dev_user.role.value, principal=dev_user
+    )
     assert reply.project_created
-    assert (tmp_path / "URL-Shortener" / "README.md").exists()
+    assert (ext_dir / "URL-Shortener" / "README.md").exists()
     assert graph.calls[0][0]["user_instruction"] == "Create a new project"
     assert graph.calls[0][0]["task_id"] == reply.task_id
 

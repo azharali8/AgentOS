@@ -14,6 +14,7 @@ from backend.app.main import app
 from backend.app.config.settings import settings
 from backend.app.models.task import TaskStatus
 from backend.app.services.task_service import TaskService
+from backend.app.voice.agent.agent import VoiceAgent
 from backend.app.voice.service import VoiceService
 from backend.app.voice.streaming import FinalTurns, StreamFailure, MODEL, provider_failure
 
@@ -119,7 +120,14 @@ def test_partial_never_creates_task_and_final_reaches_real_supervisor(boundary, 
 
 
 def test_reconnect_keeps_real_clarification_context_and_discards_partial(boundary, monkeypatch, tmp_path):
-    monkeypatch.setattr(settings, 'WORKSPACE_ROOT', str(tmp_path))
+    import backend.app.config.settings as config_mod
+    fake_install = tmp_path / "fake_install"
+    fake_install.mkdir(parents=True, exist_ok=True)
+    ext_ws = tmp_path / "external_workspace"
+    ext_ws.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config_mod, "PROJECT_ROOT", fake_install)
+    monkeypatch.setattr(settings, 'WORKSPACE_ROOT', str(ext_ws))
+    monkeypatch.setattr(VoiceAgent, "_resolve_project_parent", staticmethod(lambda: ext_ws))
     monkeypatch.setattr(settings, 'LLM_PROVIDER', 'unconfigured-stream-test-provider')
     session = uuid.uuid4().hex
     with TestClient(app) as client:
@@ -141,7 +149,7 @@ def test_reconnect_keeps_real_clarification_context_and_discards_partial(boundar
             ws.send_bytes(bytes(3200)); ws.receive_json(); ws.receive_json()
             result = ws.receive_json()
             assert result['project_created'] is True
-            assert (tmp_path / 'ShortLink').is_dir()
+            assert (ext_ws / 'ShortLink').is_dir()
             assert not VoiceService.get_conversation_state(session, 'dev-default').has_pending_question()
             for _ in range(100):
                 task = TaskService.get_task(result['task_id'])
